@@ -8,7 +8,7 @@ A hybrid **vector + call-graph** code index for RAG. It extracts classes, method
 CodeRag.Core          Models, interfaces (IVectorStore, ILanguageAnalyzer, IEmbeddingService, ISolutionAnalyzer)
 CodeRag.Analyzers     Roslyn (C#, full semantic) + TsCompilerAnalyzer (TS/TSX, full type-checker)
                       + Tree-sitter stubs (JavaScript/JSX, Python, Go)
-CodeRag.Storage       EF Core + PostgreSQL/pgvector, OpenAI / Google embeddings
+CodeRag.Storage       EF Core + PostgreSQL/pgvector, OpenAI / Google / Ollama embeddings
 CodeRag.Dashboard     Blazor Server dashboard -- indexing, search, explorer, watches
 tools/ts-analyzer     Node.js sidecar (ts-morph) spawned by TsCompilerAnalyzer
 ```
@@ -140,6 +140,11 @@ Edit `src/CodeRag.Dashboard/appsettings.json` (or use environment variables):
 **OpenAI:**
 ```json
 "Embedding": { "Provider": "OpenAI", "ApiKey": "sk-...", "Model": "text-embedding-3-small", "Dimensions": 1536 }
+```
+
+**Ollama:**
+```json
+"Embedding": { "Provider": "Ollama", "ApiKey": "sk-...", "Model": "text-embedding-3-small", "Dimensions": 1536 }
 ```
 
 Without an API key the app starts with fake embeddings (vector search returns nothing useful but the rest of the UI works).
