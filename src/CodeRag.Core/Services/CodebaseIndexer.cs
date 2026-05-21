@@ -136,36 +136,31 @@ public class CodebaseIndexer
         var pool = Math.Max(topK + 10, topK * Math.Max(1, options.CandidateMultiplier));
         var filter = options.Filter;
 
-        // --- 1. symbol-exact fast path ---
-        var symbolHits = new List<SearchResult>();
-        if (options.EnableSymbolMatch && LooksLikeSymbol(query))
-        {
-            symbolHits = await _vectorStore.ExactSymbolSearchAsync(
-                query.Trim(), options.SymbolMaxHits, filter, ct);
-            foreach (var s in symbolHits)
-                s.SourceScores = new() { ["symbol"] = s.Score };
-        }
+        // --- 1 + 2 + 3: symbol / (embed → vector) / lexical run concurrently --------
+        // Symbol and lexical are plain DB queries; vector needs an embedding first but
+        // both of the other paths can overlap with the OpenAI round-trip.
 
-        // --- 2. vector ---
-        var vectorHits = new List<SearchResult>();
-        if (options.EnableVector)
-        {
-            var embedQuery = string.IsNullOrWhiteSpace(options.EmbeddingQueryOverride)
-                ? query : options.EmbeddingQueryOverride!;
-            var embedding = await _embeddingService.EmbedAsync(embedQuery, ct);
-            vectorHits = await _vectorStore.SearchAsync(embedding, pool, filter, ct);
-            foreach (var v in vectorHits)
-                v.SourceScores = new() { ["vector"] = v.Score };
-        }
+        var symbolTask = options.EnableSymbolMatch && LooksLikeSymbol(query)
+            ? _vectorStore.ExactSymbolSearchAsync(query.Trim(), options.SymbolMaxHits, filter, ct)
+            : Task.FromResult(new List<SearchResult>());
 
-        // --- 3. lexical ---
-        var lexicalHits = new List<SearchResult>();
-        if (options.EnableLexical)
-        {
-            lexicalHits = await _vectorStore.LexicalSearchAsync(query, pool, filter, ct);
-            foreach (var l in lexicalHits)
-                l.SourceScores = new() { ["lexical"] = l.Score };
-        }
+        var lexicalTask = options.EnableLexical
+            ? _vectorStore.LexicalSearchAsync(query, pool, filter, ct)
+            : Task.FromResult(new List<SearchResult>());
+
+        var vectorTask = options.EnableVector
+            ? EmbedThenSearchAsync(query, options, pool, filter, ct)
+            : Task.FromResult(new List<SearchResult>());
+
+        await Task.WhenAll(symbolTask, lexicalTask, vectorTask);
+
+        var symbolHits = symbolTask.Result;
+        var lexicalHits = lexicalTask.Result;
+        var vectorHits  = vectorTask.Result;
+
+        foreach (var s in symbolHits) s.SourceScores = new() { ["symbol"] = s.Score };
+        foreach (var v in vectorHits)  v.SourceScores ??= new();
+        foreach (var l in lexicalHits) { l.SourceScores ??= new(); l.SourceScores["lexical"] = l.Score; }
 
         // --- 4. RRF fuse vector + lexical ---
         var fused = ReciprocalRankFusion(
@@ -198,16 +193,17 @@ public class CodebaseIndexer
 
         var top = merged.Take(topK).ToList();
 
-        // --- 8. neighborhood expansion ---
-        if (options.ExpandNeighbors)
-            await ExpandNeighborhoodAsync(top, options, ct);
+        // --- 8 + 9: neighborhood expansion and outgoing hydration run concurrently ----
+        var expandTask = options.ExpandNeighbors
+            ? Task.WhenAll(top.Select(r => ExpandOneAsync(r, options, ct)))
+            : Task.CompletedTask;
 
-        // --- 9. outgoing edge hydration ---
-        if (options.HydrateOutgoingEdges)
-        {
-            foreach (var r in top)
-                r.OutgoingEdges = await _vectorStore.GetOutgoingEdgesAsync(r.Chunk.Id, ct);
-        }
+        var hydrateTask = options.HydrateOutgoingEdges
+            ? Task.WhenAll(top.Select(async r =>
+                r.OutgoingEdges = await _vectorStore.GetOutgoingEdgesAsync(r.Chunk.Id, ct)))
+            : Task.CompletedTask;
+
+        await Task.WhenAll(expandTask, hydrateTask);
 
         return top;
     }
@@ -287,36 +283,51 @@ public class CodebaseIndexer
     }
 
     /// <summary>
-    /// Attach the containing type chunk and incoming-edge list to each result so the
-    /// LLM sees both the immediate code AND the surrounding contract.
+    /// Attach the containing type chunk and incoming-edge list to a single result.
+    /// Called via <c>Task.WhenAll</c> so all results are expanded concurrently.
     /// </summary>
-    private async Task ExpandNeighborhoodAsync(
-        List<SearchResult> results, QueryOptions opts, CancellationToken ct)
+    private async Task ExpandOneAsync(SearchResult r, QueryOptions opts, CancellationToken ct)
     {
-        foreach (var r in results)
+        var c = r.Chunk;
+
+        var containingTypeTask = (opts.IncludeContainingType
+            && !string.IsNullOrEmpty(c.ClassName)
+            && !SearchFilter.TypeKinds.Contains(c.Kind))
+            ? _vectorStore.GetContainingTypeAsync(c.Workspace, c.Namespace, c.ClassName!, ct)
+            : Task.FromResult<CodeChunk?>(null);
+
+        var incomingTask = opts.IncludeIncomingEdges
+            ? _vectorStore.GetIncomingEdgesAsync(c.Id, ct)
+            : Task.FromResult(new List<CodeEdge>());
+
+        await Task.WhenAll(containingTypeTask, incomingTask);
+
+        var typeChunk = containingTypeTask.Result;
+        if (typeChunk is not null && typeChunk.Id != c.Id)
         {
-            var c = r.Chunk;
-
-            if (opts.IncludeContainingType
-                && !string.IsNullOrEmpty(c.ClassName)
-                && !SearchFilter.TypeKinds.Contains(c.Kind))
-            {
-                var typeChunk = await _vectorStore.GetContainingTypeAsync(
-                    c.Workspace, c.Namespace, c.ClassName!, ct);
-                if (typeChunk is not null && typeChunk.Id != c.Id)
-                {
-                    r.RelatedChunks ??= new();
-                    r.RelatedChunks.Add(new RelatedChunk { Chunk = typeChunk, Relation = "containing-type" });
-                }
-            }
-
-            if (opts.IncludeIncomingEdges)
-            {
-                var inEdges = await _vectorStore.GetIncomingEdgesAsync(c.Id, ct);
-                if (inEdges.Count > 0)
-                    r.IncomingEdges = inEdges.Take(opts.MaxIncomingEdges).ToList();
-            }
+            r.RelatedChunks ??= new();
+            r.RelatedChunks.Add(new RelatedChunk { Chunk = typeChunk, Relation = "containing-type" });
         }
+
+        var inEdges = incomingTask.Result;
+        if (inEdges.Count > 0)
+            r.IncomingEdges = inEdges.Take(opts.MaxIncomingEdges).ToList();
+    }
+
+    /// <summary>
+    /// Embed the query then run vector ANN search. Kept as a separate method so it
+    /// can be awaited concurrently with the symbol and lexical tasks.
+    /// </summary>
+    private async Task<List<SearchResult>> EmbedThenSearchAsync(
+        string query, QueryOptions options, int pool, SearchFilter? filter, CancellationToken ct)
+    {
+        var embedQuery = string.IsNullOrWhiteSpace(options.EmbeddingQueryOverride)
+            ? query : options.EmbeddingQueryOverride!;
+        var embedding = await _embeddingService.EmbedAsync(embedQuery, ct);
+        var hits = await _vectorStore.SearchAsync(embedding, pool, filter, ct);
+        foreach (var v in hits)
+            v.SourceScores = new() { ["vector"] = v.Score };
+        return hits;
     }
 
     /// <summary>
