@@ -479,6 +479,81 @@ public class CodebaseIndexer
     public Task RemoveFileAsync(string relativeFilePath, string workspace, CancellationToken ct = default) =>
         _vectorStore.DeleteByFileAsync(relativeFilePath, workspace, ct);
 
+    /// <summary>
+    /// Semantic-aware incremental reindex: re-analyze the given files **inside the context of
+    /// their parent solution** so cross-file edges (calls / inherits / library refs) are preserved.
+    /// Uses a cached MSBuildWorkspace so repeated invocations are cheap. Falls back to the
+    /// structure-only path when no <see cref="ISolutionAnalyzer"/> for C# is registered.
+    /// </summary>
+    /// <param name="solutionPath">Absolute path to the .sln/.slnx/.csproj that owns these files.</param>
+    /// <param name="absoluteFiles">Absolute paths to the files that changed on disk.</param>
+    /// <param name="workspace">Logical workspace name to tag chunks/edges with.</param>
+    /// <param name="projectDir">
+    /// Project directory used to compute the relative <c>FilePath</c> stored in the DB.
+    /// Must match what the file watcher uses or the next sweep will see a path mismatch.
+    /// </param>
+    public async Task<IndexingStats> IndexFilesInSolutionAsync(
+        string solutionPath,
+        IEnumerable<string> absoluteFiles,
+        string workspace,
+        string projectDir,
+        string? projectName = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(workspace))
+            throw new ArgumentException("Workspace is required.", nameof(workspace));
+
+        var stats = new IndexingStats { Workspace = workspace };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        var solutionAnalyzer = _analyzers.OfType<ISolutionAnalyzer>().FirstOrDefault();
+        if (solutionAnalyzer is null)
+        {
+            // No semantic analyzer available — fall back to structure-only reindex.
+            return await IndexFilesAsync(projectDir, absoluteFiles, workspace, projectName, ct);
+        }
+
+        var files = absoluteFiles
+            .Where(File.Exists)
+            .Where(f => string.Equals(Path.GetExtension(f), ".cs", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !IsExcluded(f))
+            .Distinct()
+            .ToList();
+
+        stats.TotalFiles = files.Count;
+        if (files.Count == 0)
+        {
+            sw.Stop();
+            stats.Duration = sw.Elapsed;
+            return stats;
+        }
+
+        // Wipe old chunks/edges for each file (by the same relative path the analyzer will produce).
+        foreach (var file in files)
+        {
+            var relativePath = Path.GetRelativePath(projectDir, file);
+            await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
+        }
+
+        AnalysisResult result;
+        try
+        {
+            result = await solutionAnalyzer.AnalyzeFilesInSolutionAsync(solutionPath, files, workspace);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Semantic reindex failed ({ex.Message}); falling back to structure-only.");
+            return await IndexFilesAsync(projectDir, files, workspace, projectName, ct);
+        }
+
+        StampWorkspace(result.Chunks, result.Edges, workspace);
+        await EmbedAndStore(result.Chunks, result.Edges, stats, ct);
+
+        sw.Stop();
+        stats.Duration = sw.Elapsed;
+        return stats;
+    }
+
     /// <summary>Set of file extensions (incl. leading dot) all registered analyzers can process.</summary>
     public IReadOnlySet<string> SupportedExtensions =>
         _analyzers.SelectMany(a => a.SupportedExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -14,6 +14,12 @@ public class WatchedRoot
     public required string Path { get; set; }
     public required string Workspace { get; set; }
     public string? Project { get; set; }
+    /// <summary>
+    /// Optional path to the .sln / .slnx / .csproj this watch belongs to. When set, file
+    /// changes are reindexed with the full Roslyn semantic model (preserving cross-file
+    /// edges like calls/inherits/library refs) instead of the structure-only fast path.
+    /// </summary>
+    public string? SolutionPath { get; set; }
     public bool Enabled { get; set; } = true;
     public bool IncludeSubdirectories { get; set; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

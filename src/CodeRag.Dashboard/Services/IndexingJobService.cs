@@ -180,6 +180,7 @@ public class IndexingJobService
                 Path = dir,
                 Workspace = job.Workspace,
                 Project = projectName,
+                SolutionPath = job.Path,
                 IncludeSubdirectories = true,
             }, skipInitialSweep: true);
         }

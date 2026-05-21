@@ -86,7 +86,10 @@
         <div class="card">
             <div style="display:flex;justify-content:space-between;gap:1rem">
                 <div>
-                    <strong class="mono">@(c.Signature ?? c.FunctionName)</strong>
+                    <a class="mono" style="font-weight:600;text-decoration:none"
+                       href="explore/@Uri.EscapeDataString(c.Workspace)?chunk=@c.Id">
+                        @(c.Signature ?? c.FunctionName)
+                    </a>
                     <div class="muted mono" style="font-size:0.8rem">
                         @c.FilePath:@c.LineNumber
                         — <span class="badge info">@c.Kind</span>
@@ -130,7 +133,10 @@
                     {
                         <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
                             <span class="badge">@rc.Relation</span>
-                            @(rc.Chunk.Signature ?? rc.Chunk.FunctionName)
+                            <a href="explore/@Uri.EscapeDataString(rc.Chunk.Workspace)?chunk=@rc.Chunk.Id"
+                               style="text-decoration:none">
+                                @(rc.Chunk.Signature ?? rc.Chunk.FunctionName)
+                            </a>
                             <span class="muted">— @rc.Chunk.FilePath:@rc.Chunk.LineNumber</span>
                         </div>
                     }
@@ -143,7 +149,16 @@
                     @foreach (var e in r.IncomingEdges)
                     {
                         <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
-                            @(e.SourceSignature ?? "?") <span class="muted">— @e.FilePath:@e.LineNumber</span>
+                            @if (e.SourceChunkId != Guid.Empty)
+                            {
+                                <a href="explore/@Uri.EscapeDataString(c.Workspace)?chunk=@e.SourceChunkId"
+                                   style="text-decoration:none">@(e.SourceSignature ?? "?")</a>
+                            }
+                            else
+                            {
+                                @(e.SourceSignature ?? "?")
+                            }
+                            <span class="muted">— @e.FilePath:@e.LineNumber</span>
                         </div>
                     }
                 </details>
@@ -155,7 +170,16 @@
                     @foreach (var e in r.OutgoingEdges)
                     {
                         <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
-                            @(e.TargetSignature ?? e.TargetMemberName) <span class="muted">— @(e.IsExternal ? "external" : "internal") @e.EdgeKind</span>
+                            @if (!e.IsExternal && e.TargetChunkId.HasValue)
+                            {
+                                <a href="explore/@Uri.EscapeDataString(c.Workspace)?chunk=@e.TargetChunkId"
+                                   style="text-decoration:none">@(e.TargetSignature ?? e.TargetMemberName)</a>
+                            }
+                            else
+                            {
+                                @(e.TargetSignature ?? e.TargetMemberName)
+                            }
+                            <span class="muted">— @(e.IsExternal ? "external" : "internal") @e.EdgeKind</span>
                         </div>
                     }
                 </details>

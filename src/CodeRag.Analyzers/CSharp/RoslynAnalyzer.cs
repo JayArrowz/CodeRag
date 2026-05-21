@@ -21,6 +21,14 @@ public class RoslynAnalyzer : ISolutionAnalyzer
     private static bool _msbuildRegistered;
     private static readonly object _lock = new();
 
+    /// <summary>
+    /// One <see cref="MSBuildWorkspace"/> per solution path, kept warm so incremental
+    /// reindexes triggered by the file watcher don't pay the multi-second load cost
+    /// every time a file is saved. Keyed by full path, case-insensitive.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<MSBuildWorkspace>>
+        _workspaceCache = new(StringComparer.OrdinalIgnoreCase);
+
     public string[] SupportedExtensions => [".cs"];
     public string LanguageName => "csharp";
     public bool HasSemanticModel => true;
@@ -45,33 +53,10 @@ public class RoslynAnalyzer : ISolutionAnalyzer
     /// </summary>
     public async Task<AnalysisResult> AnalyzeSolutionAsync(string solutionOrProjectPath, string workspace)
     {
-        EnsureMSBuildRegistered();
-
-        var msbuildWorkspace = MSBuildWorkspace.Create();
-        msbuildWorkspace.WorkspaceFailed += (_, e) =>
-        {
-            if (e.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
-                Console.Error.WriteLine($"  Workspace: {e.Diagnostic.Message}");
-        };
-
-        IEnumerable<Project> projects;
-        if (solutionOrProjectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
-        {
-            var solution = await msbuildWorkspace.OpenSolutionAsync(solutionOrProjectPath);
-            projects = solution.Projects;
-        }
-        else if (solutionOrProjectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
-        {
-            projects = await OpenSlnxProjectsAsync(msbuildWorkspace, solutionOrProjectPath);
-        }
-        else
-        {
-            var project = await msbuildWorkspace.OpenProjectAsync(solutionOrProjectPath);
-            projects = [project];
-        }
-
-        var solutionProjectNames = projects.Select(p => p.AssemblyName).ToHashSet();
+        var ws = await GetOrLoadWorkspaceAsync(solutionOrProjectPath);
+        var projects = ws.CurrentSolution.Projects.ToList();
         var result = new AnalysisResult();
+        var solutionProjectNames = projects.Select(p => p.AssemblyName).ToHashSet();
 
         foreach (var project in projects)
         {
@@ -79,22 +64,142 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             var compilation = await project.GetCompilationAsync();
             if (compilation is null) continue;
 
+            var projectDir = ProjectDirOrNull(project);
+
             foreach (var doc in project.Documents)
             {
                 if (doc.FilePath is null) continue;
-
-                var tree = await doc.GetSyntaxTreeAsync();
-                if (tree is null) continue;
-
-                var root = await tree.GetRootAsync();
-                var semanticModel = compilation.GetSemanticModel(tree);
-
-                ExtractFromRoot(root, doc.FilePath, project.Name, semanticModel, solutionProjectNames, result);
+                await ExtractDocumentAsync(doc, compilation, projectDir, project.Name,
+                    solutionProjectNames, result);
             }
         }
 
         ResolveEdgeTargets(result);
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<AnalysisResult> AnalyzeFilesInSolutionAsync(
+        string solutionOrProjectPath,
+        IEnumerable<string> absoluteFilePaths,
+        string workspace)
+    {
+        var ws = await GetOrLoadWorkspaceAsync(solutionOrProjectPath);
+
+        // Refresh on-disk text for the changed files so the cached compilation sees the new code.
+        // IMPORTANT: do **not** call ws.TryApplyChanges(sol) here — that writes the document text
+        // back to disk through the workspace, which the FileSystemWatcher sees as another change
+        // and triggers an infinite reindex loop. We keep the updated Solution local to this
+        // analysis; the next call re-reads from disk via WithDocumentText again.
+        var sol = ws.CurrentSolution;
+        var fileSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var abs in absoluteFilePaths)
+        {
+            if (!File.Exists(abs)) continue;
+            var full = Path.GetFullPath(abs);
+            fileSet.Add(full);
+
+            var docIds = sol.GetDocumentIdsWithFilePath(full);
+            if (docIds.IsEmpty) continue;
+
+            string newText;
+            try { newText = await File.ReadAllTextAsync(full); }
+            catch { continue; }
+
+            var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(newText);
+            foreach (var did in docIds)
+                sol = sol.WithDocumentText(did, sourceText);
+        }
+
+        var result = new AnalysisResult();
+        var solutionProjectNames = sol.Projects.Select(p => p.AssemblyName).ToHashSet();
+
+        foreach (var project in sol.Projects)
+        {
+            var matching = project.Documents
+                .Where(d => d.FilePath is not null && fileSet.Contains(Path.GetFullPath(d.FilePath)))
+                .ToList();
+            if (matching.Count == 0) continue;
+
+            var compilation = await project.GetCompilationAsync();
+            if (compilation is null) continue;
+
+            var projectDir = ProjectDirOrNull(project);
+            foreach (var doc in matching)
+                await ExtractDocumentAsync(doc, compilation, projectDir, project.Name,
+                    solutionProjectNames, result);
+        }
+
+        ResolveEdgeTargets(result);
+        return result;
+    }
+
+    private async Task ExtractDocumentAsync(Document doc, Compilation compilation,
+        string? projectDir, string projectName, HashSet<string> solutionProjectNames,
+        AnalysisResult result)
+    {
+        var tree = await doc.GetSyntaxTreeAsync();
+        if (tree is null) return;
+
+        var root = await tree.GetRootAsync();
+        var semanticModel = compilation.GetSemanticModel(tree);
+
+        // Store file paths relative to the project directory so they line up with the
+        // file-watcher sweep (which uses Path.GetRelativePath(projectDir, file)).
+        var storedPath = projectDir is null
+            ? doc.FilePath!
+            : Path.GetRelativePath(projectDir, doc.FilePath!);
+
+        ExtractFromRoot(root, storedPath, projectName, semanticModel, solutionProjectNames, result);
+    }
+
+    private static string? ProjectDirOrNull(Project project) =>
+        string.IsNullOrEmpty(project.FilePath) ? null : Path.GetDirectoryName(project.FilePath);
+
+    /// <summary>
+    /// Load (and cache) an <see cref="MSBuildWorkspace"/> for the given .sln/.slnx/.csproj.
+    /// First call pays the load cost; subsequent calls reuse the warm workspace so
+    /// incremental file-change reindexes are fast and preserve semantic edges.
+    /// </summary>
+    private Task<MSBuildWorkspace> GetOrLoadWorkspaceAsync(string solutionOrProjectPath)
+    {
+        var key = Path.GetFullPath(solutionOrProjectPath);
+        return _workspaceCache.GetOrAdd(key, async path =>
+        {
+            EnsureMSBuildRegistered();
+            var ws = MSBuildWorkspace.Create();
+            ws.WorkspaceFailed += (_, e) =>
+            {
+                if (e.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
+                    Console.Error.WriteLine($"  Workspace: {e.Diagnostic.Message}");
+            };
+
+            if (path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+            {
+                await ws.OpenSolutionAsync(path);
+            }
+            else if (path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+            {
+                // OpenSlnxProjectsAsync already mutates `ws`; ignore returned list.
+                _ = await OpenSlnxProjectsAsync(ws, path);
+            }
+            else
+            {
+                await ws.OpenProjectAsync(path);
+            }
+            return ws;
+        });
+    }
+
+    /// <summary>
+    /// Drop the cached workspace for <paramref name="solutionOrProjectPath"/> so the next
+    /// analysis picks up project-file edits (added/removed source files, package changes).
+    /// </summary>
+    public static void EvictWorkspaceCache(string solutionOrProjectPath)
+    {
+        var key = Path.GetFullPath(solutionOrProjectPath);
+        if (_workspaceCache.TryRemove(key, out var t) && t.IsCompletedSuccessfully)
+            t.Result.Dispose();
     }
 
     private void ExtractFromRoot(SyntaxNode root, string filePath, string? projectName,

@@ -70,10 +70,13 @@ public class CodeExplorerService(IDbContextFactory<CodeRagDbContextBase> dbFacto
     public async Task<List<CodeEdgeEntity>> GetOutgoingEdgesAsync(Guid chunkId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        return await db.CodeEdges
+        var edges = await db.CodeEdges
             .Where(e => e.SourceChunkId == chunkId)
             .OrderBy(e => e.LineNumber)
             .ToListAsync();
+
+        await ResolveUnlinkedEdgesAsync(db, edges);
+        return edges;
     }
 
     public async Task<List<CodeEdgeEntity>> GetIncomingEdgesAsync(Guid chunkId)
@@ -83,5 +86,45 @@ public class CodeExplorerService(IDbContextFactory<CodeRagDbContextBase> dbFacto
             .Where(e => e.TargetChunkId == chunkId)
             .OrderBy(e => e.SourceSignature)
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// For any edge whose <c>TargetChunkId</c> was never resolved at index time (happens when
+    /// the callee was indexed in a different run or batch), attempt a signature match against
+    /// chunks in the workspace and persist the result so the next query is instant.
+    /// </summary>
+    private static async Task ResolveUnlinkedEdgesAsync(CodeRagDbContextBase db, List<CodeEdgeEntity> edges)
+    {
+        var unresolved = edges
+            .Where(e => e.TargetChunkId is null && !e.IsExternal && !string.IsNullOrEmpty(e.TargetSignature))
+            .ToList();
+        if (unresolved.Count == 0) return;
+
+        var signatures = unresolved.Select(e => e.TargetSignature!).Distinct().ToList();
+
+        // One query: fetch all matching chunks by signature.
+        var matched = await db.CodeChunks
+            .Where(c => signatures.Contains(c.Signature!))
+            .Select(c => new { c.Signature, c.Id })
+            .ToListAsync();
+
+        if (matched.Count == 0) return;
+
+        // Last-write-wins for duplicate signatures (e.g. overloads with same string form).
+        var bySignature = matched
+            .GroupBy(m => m.Signature!)
+            .ToDictionary(g => g.Key, g => g.First().Id);
+
+        bool anyUpdated = false;
+        foreach (var edge in unresolved)
+        {
+            if (!bySignature.TryGetValue(edge.TargetSignature!, out var id)) continue;
+            edge.TargetChunkId = id;
+            edge.IsExternal = false;
+            anyUpdated = true;
+        }
+
+        if (anyUpdated)
+            await db.SaveChangesAsync();
     }
 }

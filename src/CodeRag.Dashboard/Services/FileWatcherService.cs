@@ -218,7 +218,17 @@ public class FileWatcherService : IHostedService, IDisposable
                     {
                         using var scope = _sp.CreateScope();
                         var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
-                        await indexer.IndexFilesAsync(w.Path, paths, w.Workspace, w.Project);
+                        if (!string.IsNullOrEmpty(w.SolutionPath))
+                        {
+                            // Solution-aware reindex preserves semantic edges (calls, inherits,
+                            // library refs) that the file-only fast path would drop.
+                            await indexer.IndexFilesInSolutionAsync(
+                                w.SolutionPath, paths, w.Workspace, w.Path, w.Project);
+                        }
+                        else
+                        {
+                            await indexer.IndexFilesAsync(w.Path, paths, w.Workspace, w.Project);
+                        }
                         foreach (var p in paths)
                             Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, p, WatchEventKind.ReindexFile, null));
                     }
@@ -331,7 +341,15 @@ public class FileWatcherService : IHostedService, IDisposable
             // 4) Apply.
             if (toReindex.Count > 0)
             {
-                await indexer.IndexFilesAsync(w.Path, toReindex, w.Workspace, w.Project, ct);
+                if (!string.IsNullOrEmpty(w.SolutionPath))
+                {
+                    await indexer.IndexFilesInSolutionAsync(
+                        w.SolutionPath, toReindex, w.Workspace, w.Path, w.Project, ct);
+                }
+                else
+                {
+                    await indexer.IndexFilesAsync(w.Path, toReindex, w.Workspace, w.Project, ct);
+                }
                 foreach (var abs in toReindex)
                     Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, abs, WatchEventKind.ReindexFile, "sweep"));
             }
