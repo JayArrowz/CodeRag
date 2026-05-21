@@ -72,7 +72,7 @@ Every stage is individually toggleable via `QueryOptions`.
 | Arrow functions / `const fn` | TS/TSX     | Inlined as `function_declaration` chunks with full signature                      |
 | Type aliases                 | TS/TSX     | Name, namespace, body                                                             |
 | Enums                        | C#         | Name, members, XML doc                                                            |
-| Library calls                | C#         | Assembly, namespace, signature, call location                                     |
+| Library calls                | C#, TS/TSX | Assembly, namespace, signature, call location                                     |
 | Edges                        | C#, TS/TSX | Source → target signature/chunk, kind (calls/creates/inherits/implements/renders/passes) |
 
 ## Quick Start
@@ -138,7 +138,11 @@ After indexing completes the job page shows stats and a `FileSystemWatcher` is a
 
 ### Watches
 
-A **watch** is a directory that is automatically reindexed when files change. Watches are persisted to `%LOCALAPPDATA%/CodeRag/watches.json` (overridable via `WatchesFile` config key) and survive app restarts.
+A **watch** is a directory that is automatically reindexed when files change. Watches are persisted to a JSON file and survive app restarts.
+
+- **Local / bare-metal**: stored at `%LOCALAPPDATA%/CodeRag/watches.json` by default.
+- **Docker**: stored at `/data/watches.json` inside the container, backed by the `watches-data` named volume declared in `docker-compose.yml`. This ensures watches are not lost when the container is restarted or replaced.
+- Override the path via the `WatchesFile` config key (or `CODERAG_WatchesFile` env var).
 
 - Watches are created automatically after a successful index job.
 - For **solution-level** jobs, one watch is created per project directory with the solution path stored -- file changes are then reindexed using the full Roslyn semantic model (preserving cross-file call edges).
@@ -199,7 +203,7 @@ All settings live under two JSON sections in `appsettings.json`. Every key can b
 
 | appsettings.json key | Default | Description |
 |----------------------|---------|-------------|
-| `WatchesFile` | `%LOCALAPPDATA%/CodeRag/watches.json` | Path to the file-watch persistence store |
+| `WatchesFile` | `%LOCALAPPDATA%/CodeRag/watches.json` (local) / `/data/watches.json` (Docker) | Path to the file-watch persistence store. Set via `CODERAG_WatchesFile` env var when running in Docker. |
 
 ## Swapping the Vector Store
 

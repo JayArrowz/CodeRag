@@ -14,9 +14,17 @@ services:
       CODERAG_Embedding__Dimensions: "${CODERAG_Embedding__Dimensions:-3072}"
       # ── ASP.NET Core ────────────────────────────────────────────────────────
       ASPNETCORE_ENVIRONMENT: Production
+      # ── Persistence ─────────────────────────────────────────────────────────
+      # Watches are stored in the named volume below so they survive restarts.
+      CODERAG_WatchesFile: /data/watches.json
     ports:
       - "5180:8080"
     volumes:
       # Mount source folders you want to index from the dashboard.
       # Paths typed in the Index page must exist *inside* the container.
       - ./:/workspace:ro
+      # Persistent watch store — survives container restarts.
+      - watches-data:/data
+
+volumes:
+  watches-data:

@@ -212,7 +212,7 @@ function findOwnerNodeId(node, chunkIndex) {
  *     or the lib (DOM, ES, React types, etc.)
  *   - on total failure we fall back to the call text and isExternal=true
  */
-function resolveCallTarget(expression, chunkIndex) {
+function resolveCallTarget(expression, chunkIndex, project) {
   let calleeName = expression.getText();
   let dot = calleeName.lastIndexOf(".");
   let shortName = dot >= 0 ? calleeName.slice(dot + 1) : calleeName;
@@ -257,11 +257,18 @@ function resolveCallTarget(expression, chunkIndex) {
   });
   if (!pick) {
     // External: target is a library / .d.ts.
+    const extDoc = project ? getSymbolDoc(aliased, project) : null;
+    const extMeta = getExternalSymbolMeta(aliased);
+    const extPkgPath = decls[0] ? decls[0].getSourceFile().getFilePath() : null;
     return {
       nodeId: null,
       signatureText: calleeName,
       name: aliased.getName() || shortName,
       isExternal: true,
+      documentation: extDoc || undefined,
+      packageName: extractPackageFromPath(extPkgPath) || undefined,
+      namespace: extMeta.namespace || undefined,
+      className: extMeta.className || undefined,
     };
   }
 
@@ -274,6 +281,83 @@ function resolveCallTarget(expression, chunkIndex) {
     name: aliased.getName() || shortName,
     isExternal: nodeId === null,
   };
+}
+
+// ─── external library metadata ───────────────────────────────────────────────
+
+/**
+ * Extract the npm package name from a file path that contains node_modules.
+ * Handles scoped packages like @scope/pkg.
+ */
+function extractPackageFromPath(filePath) {
+  if (!filePath) return null;
+  const fwd = filePath.replace(/\\/g, "/");
+  const m = fwd.match(/node_modules\/((@[^/]+\/[^/]+)|([^/]+))/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Extract plain-text documentation from a ts-morph symbol using TypeScript's
+ * own documentation-comment API (works for .d.ts / node_modules symbols).
+ * Falls back to walking the declaration's JSDoc AST nodes directly.
+ */
+function getSymbolDoc(symbol, project) {
+  if (!symbol) return null;
+  try {
+    const checker = project.getTypeChecker().compilerObject;
+    const compSym = symbol.compilerSymbol;
+    const parts = compSym.getDocumentationComment(checker);
+    if (parts && parts.length > 0) {
+      const text = ts.displayPartsToString(parts).trim();
+      if (text) {
+        const tags = compSym.getJsDocTags(checker);
+        const tagLines = (tags || []).map((tag) => {
+          const content = ts.displayPartsToString(tag.text || []);
+          return `@${tag.name}${content ? " " + content : ""}`;
+        });
+        return tagLines.length ? `${text}\n${tagLines.join("\n")}` : text;
+      }
+    }
+  } catch {}
+  // Fallback: JSDoc nodes attached to the declaration AST node
+  try {
+    for (const decl of symbol.getDeclarations() || []) {
+      if (Node.isJSDocable(decl)) {
+        const docs = decl.getJsDocs();
+        if (docs.length > 0) {
+          const text = docs.map((d) => d.getInnerText()).join("\n").trim();
+          if (text) return text;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Walk a ts-morph symbol's parent chain to extract the containing class /
+ * interface name and module namespace. Used to populate TargetClassName and
+ * TargetNamespace on external library call edges.
+ */
+function getExternalSymbolMeta(symbol) {
+  if (!symbol) return {};
+  try {
+    const parent = symbol.compilerSymbol.parent;
+    if (!parent) return {};
+    const classFlag = ts.SymbolFlags.Class | ts.SymbolFlags.Interface | ts.SymbolFlags.TypeLiteral;
+    if (parent.flags & classFlag) {
+      const grandParent = parent.parent;
+      const ns =
+        grandParent && grandParent.name && grandParent.name !== "__global"
+          ? grandParent.name
+          : null;
+      return { className: parent.name, namespace: ns };
+    }
+    // Parent is a module / namespace
+    const ns = parent.name && parent.name !== "__global" ? parent.name : null;
+    return { namespace: ns };
+  } catch {}
+  return {};
 }
 
 // ─── chunk emission ─────────────────────────────────────────────────────────
@@ -519,7 +603,7 @@ function registerArrowVarStatement(vs, rel, ns, fileClass, chunkIndex) {
 
 // ─── edge emission (second pass) ────────────────────────────────────────────
 
-function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
+function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges, project) {
   // Type-resolved inherits/implements edges
   for (const pending of pendingTypeEdges) {
     const sym = (() => {
@@ -553,6 +637,19 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
       }
     }
 
+    let extDoc = null, extPkg = null, extNs = null, extClass = null;
+    if (isExternal && sym && project) {
+      extDoc = getSymbolDoc(sym, project);
+      const meta = getExternalSymbolMeta(sym);
+      extNs = meta.namespace || null;
+      extClass = meta.className || null;
+      try {
+        const sd = sym.getDeclarations();
+        if (sd && sd.length > 0)
+          extPkg = extractPackageFromPath(sd[0].getSourceFile().getFilePath());
+      } catch {}
+    }
+
     emit({
       type: "edge",
       sourceNodeId: pending.sourceId,
@@ -563,6 +660,10 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
       isExternal,
       filePath: chunkIndex.fileById.get(pending.sourceId) || null,
       lineNumber: pending.line,
+      targetDocumentation: extDoc || undefined,
+      targetAssembly: extPkg || undefined,
+      targetNamespace: extNs || undefined,
+      targetClassName: extClass || undefined,
     });
   }
 
@@ -577,7 +678,7 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
         if (!ownerId) return;
 
         const expr = node.getExpression();
-        const t = resolveCallTarget(expr, chunkIndex);
+        const t = resolveCallTarget(expr, chunkIndex, project);
         const line = node.getStartLineNumber();
 
         emit({
@@ -590,6 +691,10 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
           isExternal: t.isExternal,
           filePath: chunkIndex.fileById.get(ownerId) || null,
           lineNumber: line,
+          targetDocumentation: t.documentation || undefined,
+          targetAssembly: t.packageName || undefined,
+          targetNamespace: t.namespace || undefined,
+          targetClassName: t.className || undefined,
         });
         return;
       }
@@ -608,7 +713,7 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
         const ownerId = findOwnerNodeId(node, chunkIndex);
         if (!ownerId) return;
 
-        const t = resolveCallTarget(tagNode, chunkIndex);
+        const t = resolveCallTarget(tagNode, chunkIndex, project);
         const line = node.getStartLineNumber();
 
         emit({
@@ -621,6 +726,10 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
           isExternal: t.isExternal,
           filePath: chunkIndex.fileById.get(ownerId) || null,
           lineNumber: line,
+          targetDocumentation: t.documentation || undefined,
+          targetAssembly: t.packageName || undefined,
+          targetNamespace: t.namespace || undefined,
+          targetClassName: t.className || undefined,
         });
         return;
       }
@@ -645,7 +754,7 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
         if (!ownerId) return;
 
         const attrName = node.getNameNode ? node.getNameNode().getText() : null;
-        const t = resolveCallTarget(inner, chunkIndex);
+        const t = resolveCallTarget(inner, chunkIndex, project);
         const line = node.getStartLineNumber();
 
         emit({
@@ -658,6 +767,10 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges) {
           isExternal: t.isExternal,
           filePath: chunkIndex.fileById.get(ownerId) || null,
           lineNumber: line,
+          targetDocumentation: t.documentation || undefined,
+          targetAssembly: t.packageName || undefined,
+          targetNamespace: t.namespace || undefined,
+          targetClassName: t.className || undefined,
         });
         return;
       }
@@ -713,7 +826,7 @@ function analyzeAll(project, rootDir, opts) {
     // Second pass: edges (calls, new, type heritage). The emit filter still
     // applies, so only edges originating in changed files are written.
     try {
-      emitCallEdges(allSourceFiles, chunkIndex, pendingTypeEdges);
+      emitCallEdges(allSourceFiles, chunkIndex, pendingTypeEdges, project);
     } catch (e) {
       emitError("Edge extraction failed", e.stack || e.message);
     }

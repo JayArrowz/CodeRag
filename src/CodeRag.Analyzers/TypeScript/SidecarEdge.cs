@@ -9,6 +9,10 @@ public partial class TsCompilerAnalyzer
         public string? TargetNodeId { get; set; }
         public string? TargetSignature { get; set; }
         public string? TargetName { get; set; }
+        public string? TargetDocumentation { get; set; }
+        public string? TargetAssembly { get; set; }
+        public string? TargetNamespace { get; set; }
+        public string? TargetClassName { get; set; }
         public string? EdgeKind { get; set; }
         public bool IsExternal { get; set; }
         public string? FilePath { get; set; }

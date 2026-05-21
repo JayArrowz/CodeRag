@@ -1,0 +1,33 @@
+{
+  "name": "@jayarrowz/mcp-coderag",
+  "version": "1.0.1",
+  "description": "A Model Context Protocol (MCP) implementation and reference agent for code understanding and analysis, used by the CodeRag project.",
+  "license": "MIT",
+  "author": "Jay Arrowz (https://github.com/jayarrowz)",
+  "homepage": "https://github.com/jayarrowz/CodeRag",
+  "bugs": "https://github.com/jayarrowz/CodeRag/issues",
+  "main": "dist/src/index.js",
+  "bin": {
+    "mcp-coderag": "dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "dev": "tsc --watch",
+    "generate-api": "npx -y swagger-typescript-api@13.2.16 generate -p swagger.json -o ./src/api/ --axios"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "axios": "^1.13.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.19.19",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
+  },
+  "type": "module"
+}

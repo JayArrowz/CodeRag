@@ -1,0 +1,681 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "CodeRag API",
+    "description": "HTTP surface for indexing, semantic search, and graph queries.",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/init": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Create the database schema. Idempotent.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/index/solution": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Start indexing a .sln / .csproj. Returns a job id.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IndexSolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/index/directory": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Start indexing a source directory. Returns a job id.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IndexDirectoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/query": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Hybrid AI-context search: vector + lexical + symbol fast-path, fused with RRF, plus neighborhood expansion and outgoing-edge hydration. Returns LLM-ready text blocks when retrievalText=true.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Global store statistics.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workspaces": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "List indexed workspaces with chunk/edge counts.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workspaces/{name}": {
+      "delete": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Drop all chunks, edges, and watchers for a workspace.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/projects/{name}": {
+      "delete": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Drop all chunks and edges for a project.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/files": {
+      "delete": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Drop all chunks and edges for a file path.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/chunks/{id}/edges/outgoing": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Outgoing edges (calls / creates / inherits / implements) from a chunk.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/chunks/{id}/edges/incoming": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Incoming edges pointing at a chunk.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "All indexing jobs (queued / running / finished).",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Single job with full log output.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Remove a finished job from the registry.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Cancel a running or queued job.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/watches": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "List configured directory watches (auto-reindex roots).",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Register a directory to be auto-synced to the index.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/watches/events": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Recent watcher events (reindex / remove / sweep / error).",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/watches/{id}": {
+      "patch": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Enable or disable a watch.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Stop watching this root (does not delete indexed data).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/watches/{id}/sweep": {
+      "post": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Force a catch-up sweep for this watch right now.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddWatchRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace": {
+            "type": "string",
+            "nullable": true
+          },
+          "project": {
+            "type": "string",
+            "nullable": true
+          },
+          "includeSubdirectories": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "IndexDirectoryRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace": {
+            "type": "string",
+            "nullable": true
+          },
+          "project": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "IndexSolutionRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "QueryRequest": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "allWorkspaces": {
+            "type": "boolean"
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "project": {
+            "type": "string",
+            "nullable": true
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "filePath": {
+            "type": "string",
+            "nullable": true
+          },
+          "filePathContains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "excludeFilePathContains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "topK": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "candidateMultiplier": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "enableSymbolMatch": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "enableVector": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "enableLexical": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "rrfK": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "symbolMaxHits": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "minVectorScore": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "diversifyResults": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "maxPerFile": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "maxPerClass": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "expandNeighbors": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "includeContainingType": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "includeIncomingEdges": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "maxIncomingEdges": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "hydrateEdges": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "tokenBudgetPerResult": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "embeddingQueryOverride": {
+            "type": "string",
+            "nullable": true
+          },
+          "retrievalText": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "dedupeLibraryDocs": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateWatchRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
