@@ -12,5 +12,18 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.12.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="4.12.0" />
+    <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" />
+  </ItemGroup>
+  <!--
+    Ship the Node.js TS analyzer sidecar alongside our binaries so consumers
+    (CLI / Dashboard) don't have to walk up the source tree to find it.
+    node_modules is excluded — TsCompilerAnalyzer.EnsureDependencies will
+    npm-install on first use against whatever node the host machine has.
+  -->
+  <ItemGroup>
+    <None Include="..\..\tools\ts-analyzer\**\*"
+          Exclude="..\..\tools\ts-analyzer\node_modules\**;..\..\tools\ts-analyzer\**\*.log"
+          CopyToOutputDirectory="PreserveNewest"
+          LinkBase="tools\ts-analyzer" />
   </ItemGroup>
 </Project>

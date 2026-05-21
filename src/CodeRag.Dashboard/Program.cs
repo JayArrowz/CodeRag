@@ -1,4 +1,6 @@
 using CodeRag.Analyzers.CSharp;
+using CodeRag.Analyzers.TreeSitter;
+using CodeRag.Analyzers.TypeScript;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
 using CodeRag.Dashboard.Api;
@@ -19,6 +21,8 @@ builder.Services.AddVectorStore(config);
 builder.Services.AddEmbeddingService(config);
 
 builder.Services.AddSingleton<ILanguageAnalyzer, RoslynAnalyzer>();
+builder.Services.AddSingleton<ILanguageAnalyzer, TsCompilerAnalyzer>(); // .ts/.tsx via TS Compiler API sidecar
+builder.Services.AddSingleton<ILanguageAnalyzer, JavaScriptAnalyzer>(); // .js/.jsx via tree-sitter
 builder.Services.AddSingleton<CodebaseIndexer>();
 builder.Services.AddSingleton<IndexingJobService>();
 builder.Services.AddSingleton<WatchPersistence>();

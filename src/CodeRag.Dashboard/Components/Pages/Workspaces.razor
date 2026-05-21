@@ -1,6 +1,7 @@
 @page "/workspaces"
 @inject IVectorStore Store
 @inject NavigationManager Nav
+@inject CodeRag.Dashboard.Services.FileWatcherService Watcher
 
 <PageTitle>Workspaces</PageTitle>
 
@@ -64,6 +65,7 @@ else
 
     async Task Drop(string ws)
     {
+        Watcher.RemoveWorkspace(ws);
         await Store.DeleteByWorkspaceAsync(ws);
         await Refresh();
     }

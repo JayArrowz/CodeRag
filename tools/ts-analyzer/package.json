@@ -1,0 +1,17 @@
+{
+  "name": "coderag-ts-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript Compiler API sidecar used by CodeRag to extract semantically-resolved chunks and call/inherit edges from .ts/.tsx files.",
+  "main": "analyze.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node analyze.js"
+  },
+  "dependencies": {
+    "ts-morph": "^22.0.0"
+  }
+}

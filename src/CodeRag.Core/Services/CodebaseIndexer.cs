@@ -47,11 +47,43 @@ public class CodebaseIndexer
             .Where(f => !ignore.IsIgnored(f))
             .ToList();
 
-        stats.TotalFiles = files.Count;
-        Console.WriteLine($"Found {files.Count} source files to analyze (workspace: {workspace}).");
-
         var allChunks = new List<CodeChunk>();
         var allEdges = new List<CodeEdge>();
+
+        // --- Project-level analyzer dispatch (currently: TypeScript) -------------
+        // Some languages need a whole-project pass to resolve symbols. If an
+        // ISolutionAnalyzer is registered for an extension and we can find its
+        // project descriptor in the tree (e.g. tsconfig.json for .ts/.tsx),
+        // hand all matching files off to it and exclude them from the per-file
+        // loop below.
+        var consumedByProject = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var solutionAnalyzer in _analyzers.OfType<ISolutionAnalyzer>())
+        {
+            var projectPath = FindProjectDescriptor(rootPath, solutionAnalyzer);
+            if (projectPath is null) continue;
+
+            Console.WriteLine($"Running project-level {solutionAnalyzer.LanguageName} analysis: {projectPath}");
+            try
+            {
+                var projResult = await solutionAnalyzer.AnalyzeSolutionAsync(projectPath, workspace);
+                allChunks.AddRange(projResult.Chunks);
+                allEdges.AddRange(projResult.Edges);
+                foreach (var ext in solutionAnalyzer.SupportedExtensions)
+                    foreach (var f in files.Where(x => string.Equals(Path.GetExtension(x), ext, StringComparison.OrdinalIgnoreCase)))
+                        consumedByProject.Add(f);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"Project-level {solutionAnalyzer.LanguageName} analysis failed ({ex.Message}); " +
+                    "falling back to per-file analysis for those files.");
+            }
+        }
+        if (consumedByProject.Count > 0)
+            files = files.Where(f => !consumedByProject.Contains(f)).ToList();
+
+        stats.TotalFiles = files.Count + consumedByProject.Count;
+        Console.WriteLine($"Found {stats.TotalFiles} source files to analyze (workspace: {workspace}).");
 
         foreach (var batch in files.Chunk(_options.FileBatchSize))
         {
@@ -99,8 +131,11 @@ public class CodebaseIndexer
         var stats = new IndexingStats { Workspace = workspace };
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var solutionAnalyzer = _analyzers.OfType<ISolutionAnalyzer>().FirstOrDefault()
-            ?? throw new InvalidOperationException("No ISolutionAnalyzer registered. Add the RoslynAnalyzer.");
+        var solutionAnalyzer = PickSolutionAnalyzer(solutionPath)
+            ?? throw new InvalidOperationException(
+                $"No ISolutionAnalyzer is registered that can handle '{solutionPath}'. " +
+                "Add the matching analyzer (e.g. RoslynAnalyzer for .sln/.csproj, " +
+                "TsCompilerAnalyzer for tsconfig.json).");
 
         Console.WriteLine($"Analyzing solution: {solutionPath} (workspace: {workspace})");
         var result = await solutionAnalyzer.AnalyzeSolutionAsync(solutionPath, workspace);
@@ -111,6 +146,32 @@ public class CodebaseIndexer
         sw.Stop();
         stats.Duration = sw.Elapsed;
         return stats;
+    }
+
+    /// <summary>
+    /// Pick the <see cref="ISolutionAnalyzer"/> responsible for a given solution / project
+    /// descriptor path. Dispatch is by descriptor filename so the indexer stays
+    /// language-agnostic.
+    /// </summary>
+    private ISolutionAnalyzer? PickSolutionAnalyzer(string solutionOrProjectPath)
+    {
+        var name = Path.GetFileName(solutionOrProjectPath);
+        var ext  = Path.GetExtension(solutionOrProjectPath).ToLowerInvariant();
+
+        // tsconfig*.json → TypeScript
+        var isTsConfig = name.StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase)
+                         && ext == ".json";
+        // .sln / .csproj / .vbproj / .fsproj → first analyzer that handles .cs (Roslyn today)
+        var isDotnet = ext is ".sln" or ".csproj" or ".vbproj" or ".fsproj";
+
+        foreach (var sa in _analyzers.OfType<ISolutionAnalyzer>())
+        {
+            var exts = sa.SupportedExtensions;
+            if (isTsConfig && (exts.Contains(".ts") || exts.Contains(".tsx"))) return sa;
+            if (isDotnet && exts.Contains(".cs")) return sa;
+        }
+        // Fallback: first registered.
+        return _analyzers.OfType<ISolutionAnalyzer>().FirstOrDefault();
     }
 
     /// <summary>
@@ -380,21 +441,59 @@ public class CodebaseIndexer
         // Build signature -> id map scoped to this indexing run (== one workspace),
         // so identical signatures across workspaces never cross-link.
         var bySignature = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        // Fallback: bare function name -> (language -> id). Lets us resolve TS/JS call
+        // sites whose AST text is just "foo" against a chunk whose full Signature is
+        // "src.i18n.I18nProvider.foo(...)". Scoped per-language so a TS call never
+        // resolves to a same-named C# method.
+        var byNameByLang = new Dictionary<(string lang, string name), Guid>();
         foreach (var c in chunks)
         {
-            if (string.IsNullOrEmpty(c.Signature)) continue;
-            bySignature.TryAdd(c.Signature, c.Id);
+            if (!string.IsNullOrEmpty(c.Signature))
+                bySignature.TryAdd(c.Signature, c.Id);
+            if (!string.IsNullOrEmpty(c.FunctionName) && !string.IsNullOrEmpty(c.Language))
+                byNameByLang.TryAdd((c.Language, c.FunctionName), c.Id);
         }
 
         foreach (var edge in edges)
         {
             if (edge.TargetChunkId is not null) continue;
+
             if (bySignature.TryGetValue(edge.TargetSignature, out var id))
             {
                 edge.TargetChunkId = id;
                 edge.IsExternal = false;
+                continue;
+            }
+
+            // Bare-name fallback for languages whose call sites don't carry a fully-
+            // qualified signature (TypeScript/JavaScript). Only fires when the target
+            // looks like a single identifier or simple member access ("obj.method").
+            if (string.IsNullOrEmpty(edge.Language)) continue;
+            var bare = ExtractBareName(edge.TargetSignature);
+            if (bare is null) continue;
+            if (byNameByLang.TryGetValue((edge.Language, bare), out var nid))
+            {
+                edge.TargetChunkId = nid;
+                edge.IsExternal = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Extracts the last identifier from a call-target text like <c>foo</c>,
+    /// <c>obj.foo</c>, or <c>ns.cls.foo</c>. Returns null if the text contains
+    /// characters that suggest it isn't a simple member-access chain
+    /// (parentheses, brackets, generics, etc.).
+    /// </summary>
+    private static string? ExtractBareName(string targetSig)
+    {
+        if (string.IsNullOrEmpty(targetSig)) return null;
+        foreach (var ch in targetSig)
+            if (ch is '(' or ')' or '[' or ']' or '<' or '>' or ' ' or '\n' or '\r' or '\t')
+                return null;
+        var lastDot = targetSig.LastIndexOf('.');
+        var name = lastDot < 0 ? targetSig : targetSig[(lastDot + 1)..];
+        return name.Length == 0 ? null : name;
     }
 
     private static void StampWorkspace(List<CodeChunk> chunks, List<CodeEdge> edges, string workspace)
@@ -409,6 +508,42 @@ public class CodebaseIndexer
     {
         var normalized = path.Replace('\\', '/');
         return _options.ExcludePatterns.Any(p => normalized.Contains(p, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Locate a project descriptor (e.g. <c>tsconfig.json</c>) inside <paramref name="rootPath"/>
+    /// that the given solution-level analyzer can consume. Returns the first match (top-level
+    /// preferred), or <c>null</c> if no descriptor exists or this analyzer doesn't need one
+    /// for per-directory indexing.
+    ///
+    /// Only languages whose per-file analysis is degraded without project context are
+    /// auto-routed through the ISolutionAnalyzer here. C# stays per-file in directory mode
+    /// because Roslyn's <c>AnalyzeFileAsync</c> produces usable output on its own; callers
+    /// who want full semantic resolution invoke <see cref="IndexSolutionAsync"/> explicitly.
+    /// </summary>
+    private static string? FindProjectDescriptor(string rootPath, ISolutionAnalyzer analyzer)
+    {
+        var patterns = new List<string>();
+        foreach (var ext in analyzer.SupportedExtensions)
+        {
+            switch (ext.ToLowerInvariant())
+            {
+                case ".ts":
+                case ".tsx":
+                    patterns.Add("tsconfig.json");
+                    break;
+                // .cs / .csproj / .sln are intentionally NOT auto-routed: see XML doc.
+            }
+        }
+
+        foreach (var pat in patterns.Distinct())
+        {
+            var top = Directory.EnumerateFiles(rootPath, pat, SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (top is not null) return top;
+            var deep = Directory.EnumerateFiles(rootPath, pat, SearchOption.AllDirectories).FirstOrDefault();
+            if (deep is not null) return deep;
+        }
+        return null;
     }
 
     /// <summary>
@@ -504,7 +639,7 @@ public class CodebaseIndexer
     /// Must match what the file watcher uses or the next sweep will see a path mismatch.
     /// </param>
     public async Task<IndexingStats> IndexFilesInSolutionAsync(
-        string solutionPath,
+        string? solutionPath,
         IEnumerable<string> absoluteFiles,
         string workspace,
         string projectDir,
@@ -517,48 +652,122 @@ public class CodebaseIndexer
         var stats = new IndexingStats { Workspace = workspace };
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var solutionAnalyzer = _analyzers.OfType<ISolutionAnalyzer>().FirstOrDefault();
-        if (solutionAnalyzer is null)
-        {
-            // No semantic analyzer available — fall back to structure-only reindex.
-            return await IndexFilesAsync(projectDir, absoluteFiles, workspace, projectName, ct);
-        }
-
-        var files = absoluteFiles
+        var allFiles = absoluteFiles
             .Where(File.Exists)
-            .Where(f => string.Equals(Path.GetExtension(f), ".cs", StringComparison.OrdinalIgnoreCase))
             .Where(f => !IsExcluded(f))
             .Distinct()
             .ToList();
 
-        stats.TotalFiles = files.Count;
-        if (files.Count == 0)
+        stats.TotalFiles = allFiles.Count;
+        if (allFiles.Count == 0)
         {
             sw.Stop();
             stats.Duration = sw.Elapsed;
             return stats;
         }
 
-        // Wipe old chunks/edges for each file (by the same relative path the analyzer will produce).
-        foreach (var file in files)
+        // Group files by which ISolutionAnalyzer claims the extension. Files that no
+        // ISolutionAnalyzer handles fall through to the per-file path so JS / Python /
+        // tree-sitter-only languages still get reindexed by the watcher.
+        var solutionAnalyzers = _analyzers.OfType<ISolutionAnalyzer>().ToList();
+        var groups = new Dictionary<ISolutionAnalyzer, List<string>>();
+        var leftover = new List<string>();
+        foreach (var f in allFiles)
         {
-            var relativePath = Path.GetRelativePath(projectDir, file);
-            await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
+            var ext = Path.GetExtension(f);
+            var sa = solutionAnalyzers.FirstOrDefault(a =>
+                a.SupportedExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase));
+            if (sa is null)
+            {
+                leftover.Add(f);
+                continue;
+            }
+            if (!groups.TryGetValue(sa, out var bucket))
+                groups[sa] = bucket = new List<string>();
+            bucket.Add(f);
         }
 
-        AnalysisResult result;
-        try
+        var combinedChunks = new List<CodeChunk>();
+        var combinedEdges  = new List<CodeEdge>();
+
+        foreach (var (analyzer, files) in groups)
         {
-            result = await solutionAnalyzer.AnalyzeFilesInSolutionAsync(solutionPath, files, workspace);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Semantic reindex failed ({ex.Message}); falling back to structure-only.");
-            return await IndexFilesAsync(projectDir, files, workspace, projectName, ct);
+            // Pick the project descriptor for this analyzer. Prefer the caller's
+            // solutionPath when it's the right kind of file (.sln for Roslyn,
+            // tsconfig.json for TS, etc.); otherwise discover one under projectDir.
+            string? descriptor = null;
+            if (!string.IsNullOrEmpty(solutionPath) && File.Exists(solutionPath))
+            {
+                var solExt = Path.GetExtension(solutionPath);
+                var matchesAnalyzer =
+                    (analyzer.LanguageName == "csharp" &&
+                        (solExt.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+                         solExt.Equals(".csproj", StringComparison.OrdinalIgnoreCase))) ||
+                    (analyzer.LanguageName == "typescript" &&
+                        Path.GetFileName(solutionPath).StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase) &&
+                        solExt.Equals(".json", StringComparison.OrdinalIgnoreCase));
+                if (matchesAnalyzer) descriptor = solutionPath;
+            }
+            descriptor ??= FindProjectDescriptor(projectDir, analyzer);
+
+            if (descriptor is null)
+            {
+                // No project descriptor available — degrade these files to per-file.
+                leftover.AddRange(files);
+                continue;
+            }
+
+            // Wipe old chunks/edges before re-emit.
+            foreach (var file in files)
+            {
+                var relativePath = Path.GetRelativePath(projectDir, file);
+                await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
+            }
+
+            try
+            {
+                var result = await analyzer.AnalyzeFilesInSolutionAsync(descriptor, files, workspace);
+                combinedChunks.AddRange(result.Chunks);
+                combinedEdges.AddRange(result.Edges);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"Semantic reindex via {analyzer.LanguageName} failed ({ex.Message}); " +
+                    $"falling back to structure-only for {files.Count} file(s).");
+                leftover.AddRange(files);
+            }
         }
 
-        StampWorkspace(result.Chunks, result.Edges, workspace);
-        await EmbedAndStore(result.Chunks, result.Edges, stats, ct);
+        // Per-file fallback for unhandled / failed files.
+        if (leftover.Count > 0)
+        {
+            foreach (var file in leftover)
+            {
+                var relativePath = Path.GetRelativePath(projectDir, file);
+                await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
+            }
+            foreach (var file in leftover)
+            {
+                var analyzer = _analyzers.FirstOrDefault(a =>
+                    a.SupportedExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase));
+                if (analyzer is null) continue;
+                try
+                {
+                    var content = await File.ReadAllTextAsync(file, ct);
+                    var res = await analyzer.AnalyzeFileAsync(file, content, workspace, projectName);
+                    combinedChunks.AddRange(res.Chunks);
+                    combinedEdges.AddRange(res.Edges);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Per-file reindex of '{file}' failed: {ex.Message}");
+                }
+            }
+        }
+
+        StampWorkspace(combinedChunks, combinedEdges, workspace);
+        await EmbedAndStore(combinedChunks, combinedEdges, stats, ct);
 
         sw.Stop();
         stats.Duration = sw.Elapsed;

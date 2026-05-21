@@ -1,78 +1,105 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Models;
+using TreeSitter;
 
 namespace CodeRag.Analyzers.TreeSitter;
 
 /// <summary>
 /// Base class for Tree-sitter-based analyzers.
-/// Provides syntax-level extraction for languages not supported by Roslyn.
+/// Provides syntax-level extraction using the TreeSitter.DotNet library.
 /// </summary>
 public abstract class TreeSitterAnalyzerBase : ILanguageAnalyzer
 {
+    // Language objects wrap native handles; shared per name across all analyzer instances.
+    private static readonly ConcurrentDictionary<string, Language> _languageCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public abstract string[] SupportedExtensions { get; }
     public abstract string LanguageName { get; }
     public bool HasSemanticModel => false;
 
-    /// <summary>
-    /// Node kind strings for function/method definitions in this language's grammar.
-    /// e.g. ["function_definition"] for Python, ["function_declaration", "method_definition"] for TypeScript.
-    /// </summary>
-    protected abstract string[] FunctionNodeKinds { get; }
-
-    /// <summary>
-    /// Node kind strings for class definitions.
-    /// </summary>
-    protected abstract string[] ClassNodeKinds { get; }
+    /// <summary>Returns the tree-sitter language name for the given file extension.</summary>
+    protected abstract string GetTreeSitterLanguageName(string extension);
 
     public Task<AnalysisResult> AnalyzeFileAsync(string filePath, string content,
         string workspace, string? projectName = null)
     {
-        // TODO: Implement with TreeSitter NuGet package
-        // This is a placeholder showing the intended approach.
-        //
-        // var parser = new Parser();
-        // parser.Language = GetLanguage();  // abstract — each subclass provides its grammar
-        // var tree = parser.Parse(content);
-        // var root = tree.Root;
-        // WalkNode(root, content, filePath, projectName, chunks);
+        var result = new AnalysisResult();
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        var langName = GetTreeSitterLanguageName(ext);
+        var language = _languageCache.GetOrAdd(langName, n => new Language(n));
 
-        throw new NotImplementedException(
-            $"TreeSitter analyzer for {LanguageName} is not yet wired up. " +
-            "Add the TreeSitter NuGet packages and implement GetLanguage().");
+        using var parser = new Parser(language);
+        using var tree = parser.Parse(content);
+        if (tree is null) return Task.FromResult(result);
+
+        ExtractFromRoot(tree.RootNode, filePath, projectName, result);
+        ResolveEdgeTargets(result);
+        return Task.FromResult(result);
     }
-}
 
-/// <summary>
-/// Python analyzer. Function bodies use "function_definition", classes use "class_definition".
-/// Docstrings are the first expression_statement child with a string node.
-/// </summary>
-public class PythonAnalyzer : TreeSitterAnalyzerBase
-{
-    public override string[] SupportedExtensions => [".py"];
-    public override string LanguageName => "python";
-    protected override string[] FunctionNodeKinds => ["function_definition"];
-    protected override string[] ClassNodeKinds => ["class_definition"];
-}
+    protected abstract void ExtractFromRoot(Node root, string filePath,
+        string? projectName, AnalysisResult result);
 
-/// <summary>
-/// TypeScript/JavaScript analyzer.
-/// </summary>
-public class TypeScriptAnalyzer : TreeSitterAnalyzerBase
-{
-    public override string[] SupportedExtensions => [".ts", ".tsx", ".js", ".jsx"];
-    public override string LanguageName => "typescript";
-    protected override string[] FunctionNodeKinds =>
-        ["function_declaration", "method_definition", "arrow_function"];
-    protected override string[] ClassNodeKinds => ["class_declaration"];
-}
+    protected static int StartLine(Node node) => node.StartPosition.Row + 1;
+    protected static int EndLine(Node node) => node.EndPosition.Row + 1;
 
-/// <summary>
-/// Go analyzer.
-/// </summary>
-public class GoAnalyzer : TreeSitterAnalyzerBase
-{
-    public override string[] SupportedExtensions => [".go"];
-    public override string LanguageName => "go";
-    protected override string[] FunctionNodeKinds => ["function_declaration", "method_declaration"];
-    protected override string[] ClassNodeKinds => ["type_declaration"];
+    /// <summary>
+    /// Returns the leading JSDoc/doc-comment for a node (/** ... */).
+    /// Walks backwards through named siblings looking for a block comment.
+    /// </summary>
+    protected static string? GetPrecedingJsDoc(Node node)
+    {
+        var prev = node.PreviousNamedSibling;
+        while (prev is not null)
+        {
+            if (prev.Type == "comment")
+            {
+                var text = prev.Text;
+                if (text.StartsWith("/**")) return text;
+                // a plain // comment between JSDoc and the declaration — stop
+                break;
+            }
+            // decorators sit between a JSDoc and the declaration
+            if (prev.Type != "decorator") break;
+            prev = prev.PreviousNamedSibling;
+        }
+        return null;
+    }
+
+    /// <summary>Yields all descendant nodes depth-first.</summary>
+    protected static IEnumerable<Node> Descendants(Node node)
+    {
+        foreach (var child in node.Children)
+        {
+            yield return child;
+            foreach (var desc in Descendants(child))
+                yield return desc;
+        }
+    }
+
+    protected static Guid DeterministicGuid(string seed)
+    {
+        Span<byte> hash = stackalloc byte[16];
+        MD5.HashData(Encoding.UTF8.GetBytes(seed), hash);
+        return new Guid(hash);
+    }
+
+    private static void ResolveEdgeTargets(AnalysisResult result)
+    {
+        var bySignature = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        foreach (var chunk in result.Chunks)
+            if (!string.IsNullOrEmpty(chunk.Signature))
+                bySignature.TryAdd(chunk.Signature, chunk.Id);
+
+        foreach (var edge in result.Edges)
+            if (bySignature.TryGetValue(edge.TargetSignature, out var id))
+            {
+                edge.TargetChunkId = id;
+                edge.IsExternal = false;
+            }
+    }
 }

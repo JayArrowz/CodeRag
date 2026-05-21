@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using CodeRag.Analyzers.CSharp;
+using CodeRag.Analyzers.TypeScript;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
 
@@ -110,6 +111,66 @@ public class FileWatcherService : IHostedService, IDisposable
 
         foreach (var path in solutionPaths)
             RoslynAnalyzer.EvictWorkspaceCache(path);
+    }
+
+    /// <summary>
+    /// Permanently remove every watch for <paramref name="workspace"/>: detach
+    /// FileSystemWatchers, evict the Roslyn MSBuildWorkspace cache for any C#
+    /// solutions, evict the TypeScript sidecar process for any tsconfig roots,
+    /// then drop the persisted watch rows. Called when the workspace itself is
+    /// being deleted so its watchers don't outlive it.
+    /// </summary>
+    public int RemoveWorkspace(string workspace)
+    {
+        var rows = _persistence.List()
+            .Where(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal))
+            .ToList();
+
+        var solutionPaths = rows
+            .Where(w => !string.IsNullOrEmpty(w.SolutionPath))
+            .Select(w => w.SolutionPath!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // SolutionPath pointing at tsconfig*.json is a TS sidecar session key;
+        // additionally evict any tsconfig.json sitting at the root of each
+        // watched path as a best-effort cleanup.
+        var tsConfigs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sp in solutionPaths)
+        {
+            var name = Path.GetFileName(sp);
+            if (name.StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase) &&
+                sp.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                tsConfigs.Add(sp);
+        }
+        foreach (var w in rows)
+        {
+            if (string.IsNullOrEmpty(w.Path) || !Directory.Exists(w.Path)) continue;
+            var top = Path.Combine(w.Path, "tsconfig.json");
+            if (File.Exists(top)) tsConfigs.Add(top);
+        }
+
+        var removedIds = _persistence.RemoveByWorkspace(workspace);
+        foreach (var id in removedIds)
+        {
+            if (_roots.TryRemove(id, out var handle))
+                handle.Dispose();
+        }
+
+        foreach (var path in solutionPaths)
+        {
+            try { RoslynAnalyzer.EvictWorkspaceCache(path); }
+            catch (Exception ex) { _log.LogWarning(ex, "Roslyn cache eviction failed for {Path}", path); }
+        }
+        foreach (var path in tsConfigs)
+        {
+            try { TsCompilerAnalyzer.EvictSession(path); }
+            catch (Exception ex) { _log.LogWarning(ex, "TS sidecar eviction failed for {Path}", path); }
+        }
+
+        foreach (var w in rows)
+            Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, w.Path, WatchEventKind.RootRemoved, "workspace deleted"));
+
+        return removedIds.Count;
     }
 
     /// <summary>
@@ -263,17 +324,13 @@ public class FileWatcherService : IHostedService, IDisposable
                     {
                         using var scope = _sp.CreateScope();
                         var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
-                        if (!string.IsNullOrEmpty(w.SolutionPath))
-                        {
-                            // Solution-aware reindex preserves semantic edges (calls, inherits,
-                            // library refs) that the file-only fast path would drop.
-                            await indexer.IndexFilesInSolutionAsync(
-                                w.SolutionPath, paths, w.Workspace, w.Path, w.Project);
-                        }
-                        else
-                        {
-                            await indexer.IndexFilesAsync(w.Path, paths, w.Workspace, w.Project);
-                        }
+                        // Solution-aware reindex preserves semantic edges (calls, inherits,
+                        // library refs) that the file-only fast path would drop. The
+                        // dispatcher handles missing SolutionPath by auto-discovering a
+                        // descriptor per ISolutionAnalyzer (e.g. tsconfig.json) and falls
+                        // back per-file for languages without one.
+                        await indexer.IndexFilesInSolutionAsync(
+                            w.SolutionPath, paths, w.Workspace, w.Path, w.Project);
                         foreach (var p in paths)
                             Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, p, WatchEventKind.ReindexFile, null));
                     }
@@ -386,15 +443,12 @@ public class FileWatcherService : IHostedService, IDisposable
             // 4) Apply.
             if (toReindex.Count > 0)
             {
-                if (!string.IsNullOrEmpty(w.SolutionPath))
-                {
-                    await indexer.IndexFilesInSolutionAsync(
-                        w.SolutionPath, toReindex, w.Workspace, w.Path, w.Project, ct);
-                }
-                else
-                {
-                    await indexer.IndexFilesAsync(w.Path, toReindex, w.Workspace, w.Project, ct);
-                }
+                // Always go through IndexFilesInSolutionAsync — it groups files
+                // by ISolutionAnalyzer (so TypeScript routes through the warm
+                // sidecar even when no SolutionPath was recorded) and falls
+                // back per-file for languages without a semantic analyzer.
+                await indexer.IndexFilesInSolutionAsync(
+                    w.SolutionPath, toReindex, w.Workspace, w.Path, w.Project, ct);
                 foreach (var abs in toReindex)
                     Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, abs, WatchEventKind.ReindexFile, "sweep"));
             }

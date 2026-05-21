@@ -72,7 +72,7 @@ else
 
     async Task Drop()
     {
-        Watcher.CloseWorkspace(Name);
+        Watcher.RemoveWorkspace(Name);
         await Store.DeleteByWorkspaceAsync(Name);
         Nav.NavigateTo("workspaces");
     }

@@ -133,12 +133,16 @@ public static class CodeRagApi
             Results.Ok(await store.ListWorkspacesAsync(ct)))
             .WithSummary("List indexed workspaces with chunk/edge counts.");
 
-        api.MapDelete("/workspaces/{name}", async (string name, IVectorStore store, CancellationToken ct) =>
+        api.MapDelete("/workspaces/{name}", async (string name, IVectorStore store, FileWatcherService watcher, CancellationToken ct) =>
         {
+            // Tear down any watchers + cached analyzer sessions BEFORE dropping
+            // store rows so the FileSystemWatcher can't fire a reindex against
+            // a workspace that's mid-delete.
+            var removedWatches = watcher.RemoveWorkspace(name);
             await store.DeleteByWorkspaceAsync(name, ct);
-            return Results.Ok(new { ok = true, deleted = name });
+            return Results.Ok(new { ok = true, deleted = name, removedWatches });
         })
-        .WithSummary("Drop all chunks and edges for a workspace.");
+        .WithSummary("Drop all chunks, edges, and watchers for a workspace.");
 
         api.MapDelete("/projects/{name}", async (string name, IVectorStore store, CancellationToken ct) =>
         {
