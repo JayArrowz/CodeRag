@@ -126,6 +126,7 @@ public class FileWatcherService : IHostedService, IDisposable
             using var scope = _sp.CreateScope();
             var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
             var exts = indexer.SupportedExtensions;
+            var ignore = indexer.CreateGitIgnoreMatcher(w.Path);
 
             var fsw = new FileSystemWatcher(w.Path)
             {
@@ -135,7 +136,7 @@ public class FileWatcherService : IHostedService, IDisposable
                 InternalBufferSize = 64 * 1024,
             };
 
-            var handle = new RootHandle(w, fsw, exts, _log);
+            var handle = new RootHandle(w, fsw, exts, ignore, _log);
             handle.OnReindex = path => EnqueueReindex(w, path);
             handle.OnRemove = path => EnqueueRemove(w, path);
             handle.OnError = msg => Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, w.Path, WatchEventKind.Error, msg));
@@ -288,6 +289,7 @@ public class FileWatcherService : IHostedService, IDisposable
             var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
             var store = scope.ServiceProvider.GetRequiredService<Core.Interfaces.IVectorStore>();
             var exts = indexer.SupportedExtensions;
+            var ignore = indexer.CreateGitIgnoreMatcher(w.Path);
 
             // 1) Enumerate on-disk files (relative path → absolute path + mtime).
             var search = w.IncludeSubdirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
@@ -296,6 +298,7 @@ public class FileWatcherService : IHostedService, IDisposable
             {
                 if (!exts.Contains(Path.GetExtension(abs))) continue;
                 if (indexer.IsPathExcluded(abs)) continue;
+                if (ignore.IsIgnored(abs)) continue;
                 var rel = Path.GetRelativePath(w.Path, abs);
                 disk[rel] = (abs, File.GetLastWriteTimeUtc(abs));
             }
@@ -359,16 +362,18 @@ public class FileWatcherService : IHostedService, IDisposable
         private readonly WatchedRoot _w;
         private readonly FileSystemWatcher _fsw;
         private readonly IReadOnlySet<string> _exts;
+        private readonly GitIgnoreMatcher _ignore;
         private readonly ILogger _log;
         public Action<string>? OnReindex;
         public Action<string>? OnRemove;
         public Action<string>? OnError;
 
-        public RootHandle(WatchedRoot w, FileSystemWatcher fsw, IReadOnlySet<string> exts, ILogger log)
+        public RootHandle(WatchedRoot w, FileSystemWatcher fsw, IReadOnlySet<string> exts, GitIgnoreMatcher ignore, ILogger log)
         {
             _w = w;
             _fsw = fsw;
             _exts = exts;
+            _ignore = ignore;
             _log = log;
         }
 
@@ -376,10 +381,9 @@ public class FileWatcherService : IHostedService, IDisposable
         {
             if (string.IsNullOrEmpty(path)) return false;
             if (!_exts.Contains(Path.GetExtension(path))) return false;
-            var normalized = path.Replace('\\', '/');
-            // Mirror default IndexerOptions excludes — avoids hammering on build folders.
-            foreach (var p in new[] { "/bin/", "/obj/", "/node_modules/", "/.git/", "/dist/", "/__pycache__/", "/.vs/", "/packages/", "/TestResults/" })
-                if (normalized.Contains(p, StringComparison.OrdinalIgnoreCase)) return false;
+            // .gitignore (+ baseline build-output patterns) decides exclusion. Matcher is cached
+            // per watched root so this is hot-path safe even at FSW burst rates.
+            if (_ignore.IsIgnored(path)) return false;
             return true;
         }
 

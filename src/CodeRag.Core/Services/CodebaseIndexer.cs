@@ -40,9 +40,11 @@ public class CodebaseIndexer
             foreach (var ext in analyzer.SupportedExtensions)
                 analyzerMap.TryAdd(ext, analyzer);
 
+        var ignore = CreateGitIgnoreMatcher(rootPath);
         var files = Directory.EnumerateFiles(rootPath, "*.*", SearchOption.AllDirectories)
             .Where(f => analyzerMap.ContainsKey(Path.GetExtension(f)))
             .Where(f => !IsExcluded(f))
+            .Where(f => !ignore.IsIgnored(f))
             .ToList();
 
         stats.TotalFiles = files.Count;
@@ -219,10 +221,12 @@ public class CodebaseIndexer
         projectName ??= Path.GetFileName(rootPath);
 
         var analyzerMap = BuildAnalyzerMap();
+        var ignore = CreateGitIgnoreMatcher(rootPath);
         var files = absoluteFiles
             .Where(File.Exists)
             .Where(f => analyzerMap.ContainsKey(Path.GetExtension(f)))
             .Where(f => !IsExcluded(f))
+            .Where(f => !ignore.IsIgnored(f))
             .Distinct()
             .ToList();
 
@@ -284,6 +288,16 @@ public class CodebaseIndexer
 
     /// <summary>True when a path matches one of the configured exclude patterns (bin, obj, .git, ...).</summary>
     public bool IsPathExcluded(string path) => IsExcluded(path);
+
+    /// <summary>
+    /// Build a <see cref="GitIgnoreMatcher"/> seeded with the configured baseline patterns,
+    /// or a no-op matcher (only baseline patterns) when <see cref="IndexerOptions.RespectGitIgnore"/>
+    /// is false. Cheap to construct; callers (incl. the file watcher) should cache per root.
+    /// </summary>
+    public GitIgnoreMatcher CreateGitIgnoreMatcher(string rootPath)
+    {
+        return new GitIgnoreMatcher(rootPath, _options.ExcludePatterns, loadGitIgnores: _options.RespectGitIgnore);
+    }
 
     private Dictionary<string, ILanguageAnalyzer> BuildAnalyzerMap()
     {
