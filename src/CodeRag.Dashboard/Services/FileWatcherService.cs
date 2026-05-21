@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using CodeRag.Analyzers.CSharp;
+using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
 
 namespace CodeRag.Dashboard.Services;
@@ -84,6 +86,49 @@ public class FileWatcherService : IHostedService, IDisposable
             Log(new WatchEvent(DateTime.UtcNow, id, w.Workspace, w.Path, WatchEventKind.RootRemoved, null));
         return ok;
     }
+
+    /// <summary>
+    /// Disable all watches for <paramref name="workspace"/>, detach active FileSystemWatchers,
+    /// and evict Roslyn MSBuildWorkspace caches. Watches are kept in persistence so the
+    /// workspace can be re-opened later via <see cref="OpenWorkspace"/>.
+    /// </summary>
+    public void CloseWorkspace(string workspace)
+    {
+        var solutionPaths = _persistence.List()
+            .Where(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal)
+                        && !string.IsNullOrEmpty(w.SolutionPath))
+            .Select(w => w.SolutionPath!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var ids = _persistence.SetEnabledByWorkspace(workspace, enabled: false);
+
+        foreach (var id in ids)
+        {
+            if (_roots.TryRemove(id, out var handle))
+                handle.Dispose();
+        }
+
+        foreach (var path in solutionPaths)
+            RoslynAnalyzer.EvictWorkspaceCache(path);
+    }
+
+    /// <summary>
+    /// Re-enable all watches for <paramref name="workspace"/>, re-attach FileSystemWatchers,
+    /// and run a catch-up sweep for each root.
+    /// </summary>
+    public void OpenWorkspace(string workspace)
+    {
+        var ids = _persistence.SetEnabledByWorkspace(workspace, enabled: true);
+        foreach (var id in ids)
+        {
+            var w = _persistence.Get(id);
+            if (w is null) continue;
+            Attach(w);
+            _ = Task.Run(() => SweepAsync(w, CancellationToken.None));
+        }
+    }
+
+    public bool IsWorkspaceClosed(string workspace) => _persistence.IsWorkspaceClosed(workspace);
 
     public bool SetEnabled(Guid id, bool enabled)
     {

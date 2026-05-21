@@ -1,12 +1,21 @@
 @page "/workspaces/{Name}"
 @inject IVectorStore Store
 @inject NavigationManager Nav
+@inject FileWatcherService Watcher
 
 <PageTitle>Workspace @Name</PageTitle>
 
 <h1>
     @Name
     <button class="secondary" style="margin-left:1rem" @onclick="GoSearch">Search this workspace</button>
+    @if (_isClosed)
+    {
+        <button class="secondary" style="margin-left:0.3rem" @onclick="Open">Open workspace</button>
+    }
+    else
+    {
+        <button class="secondary" style="margin-left:0.3rem" @onclick="Close">Close workspace</button>
+    }
     <button class="danger" style="margin-left:0.3rem" @onclick="Drop">Drop workspace</button>
 </h1>
 
@@ -38,17 +47,32 @@ else
 @code {
     [Parameter] public string Name { get; set; } = "";
     WorkspaceInfo? _info;
+    bool _isClosed;
 
     protected override async Task OnInitializedAsync()
     {
         var all = await Store.ListWorkspacesAsync();
         _info = all.FirstOrDefault(w => w.Workspace == Name);
+        _isClosed = Watcher.IsWorkspaceClosed(Name);
     }
 
     void GoSearch() => Nav.NavigateTo($"search?ws={Uri.EscapeDataString(Name)}");
 
+    void Close()
+    {
+        Watcher.CloseWorkspace(Name);
+        _isClosed = true;
+    }
+
+    void Open()
+    {
+        Watcher.OpenWorkspace(Name);
+        _isClosed = false;
+    }
+
     async Task Drop()
     {
+        Watcher.CloseWorkspace(Name);
         await Store.DeleteByWorkspaceAsync(Name);
         Nav.NavigateTo("workspaces");
     }

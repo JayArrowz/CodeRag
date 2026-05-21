@@ -27,6 +27,9 @@
         <label>Project (optional)
             <input type="text" @bind="_proj" placeholder="MyApp.Web" />
         </label>
+        <label>Solution path (optional)
+            <input type="text" @bind="_sln" placeholder="D:\path\to\App.sln" style="min-width:320px" />
+        </label>
         <label><input type="checkbox" @bind="_recursive" /> recurse</label>
         <button @onclick="Add" disabled="@(!CanAdd)">Add &amp; sweep</button>
     </div>
@@ -43,7 +46,7 @@
     {
         <table class="table">
             <thead>
-                <tr><th>Path</th><th>Workspace</th><th>Project</th><th>Recursive</th><th>Enabled</th><th>Last sweep</th><th></th></tr>
+                <tr><th>Path</th><th>Workspace</th><th>Project</th><th>Solution</th><th>Recursive</th><th>Enabled</th><th>Last sweep</th><th></th></tr>
             </thead>
             <tbody>
             @foreach (var w in _watches)
@@ -52,6 +55,7 @@
                     <td><code>@w.Path</code></td>
                     <td>@w.Workspace</td>
                     <td>@(w.Project ?? "—")</td>
+                    <td>@(w.SolutionPath is not null ? System.IO.Path.GetFileName(w.SolutionPath) : "—")</td>
                     <td>@(w.IncludeSubdirectories ? "yes" : "no")</td>
                     <td>
                         <button @onclick="() => Toggle(w.Id, !w.Enabled)">
@@ -100,6 +104,7 @@
     string _path = "";
     string _ws = "";
     string _proj = "";
+    string _sln = "";
     bool _recursive = true;
     string? _error;
 
@@ -133,9 +138,10 @@
                 Path = Path.GetFullPath(_path),
                 Workspace = _ws.Trim(),
                 Project = string.IsNullOrWhiteSpace(_proj) ? null : _proj.Trim(),
+                SolutionPath = string.IsNullOrWhiteSpace(_sln) ? null : Path.GetFullPath(_sln.Trim()),
                 IncludeSubdirectories = _recursive,
             });
-            _path = ""; _proj = "";
+            _path = ""; _proj = ""; _sln = "";
             Refresh();
         }
         catch (Exception ex) { _error = ex.Message; }

@@ -88,6 +88,47 @@ public class WatchPersistence
         }
     }
 
+    /// <summary>Remove all watches belonging to <paramref name="workspace"/>. Returns the ids removed.</summary>
+    public IReadOnlyList<Guid> RemoveByWorkspace(string workspace)
+    {
+        lock (_lock)
+        {
+            var ids = _watches
+                .Where(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal))
+                .Select(w => w.Id)
+                .ToList();
+            if (ids.Count == 0) return ids;
+            _watches.RemoveAll(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal));
+            Save();
+            return ids;
+        }
+    }
+
+    /// <summary>Set <see cref="WatchedRoot.Enabled"/> for every watch in <paramref name="workspace"/>. Returns affected ids.</summary>
+    public IReadOnlyList<Guid> SetEnabledByWorkspace(string workspace, bool enabled)
+    {
+        lock (_lock)
+        {
+            var affected = _watches
+                .Where(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal))
+                .ToList();
+            if (affected.Count == 0) return Array.Empty<Guid>();
+            foreach (var w in affected) w.Enabled = enabled;
+            Save();
+            return affected.Select(w => w.Id).ToList();
+        }
+    }
+
+    /// <summary>Returns whether all watches for <paramref name="workspace"/> are currently disabled (i.e. workspace is closed).</summary>
+    public bool IsWorkspaceClosed(string workspace)
+    {
+        lock (_lock)
+        {
+            var ws = _watches.Where(w => string.Equals(w.Workspace, workspace, StringComparison.Ordinal)).ToList();
+            return ws.Count > 0 && ws.All(w => !w.Enabled);
+        }
+    }
+
     private void Load()
     {
         try
