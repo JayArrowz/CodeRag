@@ -170,11 +170,26 @@ async Task Query(string[] args)
 
     if (retrievalText)
     {
+        var libDocs = SearchResult.BuildLibraryDocIndex(results);
+        var skip = libDocs.Count == 0 ? null : (ISet<string>)new HashSet<string>(libDocs.Keys, StringComparer.Ordinal);
+
+        if (libDocs.Count > 0)
+        {
+            Console.WriteLine("// === referenced library APIs (shared across results) ===");
+            foreach (var (sig, doc) in libDocs)
+            {
+                Console.WriteLine($"// {sig}");
+                foreach (var line in doc.Split('\n'))
+                    Console.WriteLine($"//   {line.TrimEnd()}");
+            }
+            Console.WriteLine();
+        }
+
         // Emit the exact text an LLM would receive — useful for piping into prompts.
         for (int i = 0; i < results.Count; i++)
         {
             Console.WriteLine($"// === result {i + 1}/{results.Count}  score {results[i].Score:F4} ===");
-            Console.WriteLine(results[i].ToRetrievalText());
+            Console.WriteLine(results[i].ToRetrievalText(skip));
             Console.WriteLine();
         }
         return;

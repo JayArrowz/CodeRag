@@ -17,30 +17,62 @@ public class SearchResult
     /// own retrieval text plus, when <see cref="OutgoingEdges"/> is populated,
     /// inline docs for any external (library) calls the chunk makes.
     /// </summary>
-    public string ToRetrievalText()
+    /// <param name="skipDocSignatures">
+    /// When provided, the docs for any target signatures in this set are emitted as
+    /// signature-only lines (no doc body). Used to dedupe library docs across a batch
+    /// of <see cref="SearchResult"/>s — see <see cref="BuildLibraryDocIndex"/>.
+    /// </param>
+    public string ToRetrievalText(ISet<string>? skipDocSignatures = null)
     {
         var text = Chunk.ToRetrievalText();
         if (OutgoingEdges is null || OutgoingEdges.Count == 0)
             return text;
 
-        var externalDocs = OutgoingEdges
+        var externals = OutgoingEdges
             .Where(e => e.IsExternal && !string.IsNullOrWhiteSpace(e.TargetDocumentation))
             .GroupBy(e => e.TargetSignature)
             .Select(g => g.First())
             .ToList();
 
-        if (externalDocs.Count == 0)
+        if (externals.Count == 0)
             return text;
 
         var sb = new System.Text.StringBuilder(text);
         sb.AppendLine();
         sb.AppendLine("// --- referenced library APIs ---");
-        foreach (var e in externalDocs)
+        foreach (var e in externals)
         {
+            if (skipDocSignatures is not null && skipDocSignatures.Contains(e.TargetSignature))
+            {
+                // Doc body lives in the shared library-docs section; just name the call here.
+                sb.AppendLine($"// {e.TargetSignature}  (see referenced library docs)");
+                continue;
+            }
             sb.AppendLine($"// {e.TargetSignature}");
             foreach (var line in e.TargetDocumentation!.Split('\n'))
                 sb.AppendLine($"//   {line.TrimEnd()}");
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Build a signature → documentation map across a batch of results, deduplicating
+    /// shared library targets. Pair with <see cref="ToRetrievalText"/> passing the
+    /// returned dictionary's keys to avoid repeating the same XML doc per result.
+    /// </summary>
+    public static Dictionary<string, string> BuildLibraryDocIndex(IEnumerable<SearchResult> results)
+    {
+        var docs = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var r in results)
+        {
+            if (r.OutgoingEdges is null) continue;
+            foreach (var e in r.OutgoingEdges)
+            {
+                if (!e.IsExternal) continue;
+                if (string.IsNullOrWhiteSpace(e.TargetDocumentation)) continue;
+                docs.TryAdd(e.TargetSignature, e.TargetDocumentation!);
+            }
+        }
+        return docs;
     }
 }

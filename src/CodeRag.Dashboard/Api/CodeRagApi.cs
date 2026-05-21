@@ -68,20 +68,35 @@ public static class CodeRagApi
                 req.Query, req.TopK ?? 10, filter,
                 hydrateEdges: req.HydrateEdges ?? true, ct);
 
+            // When edges are hydrated, lift shared library docs out so callers (incl. an MCP server)
+            // don't get the same XML comment N times. Per-result retrievalText emits a back-reference
+            // instead of the full doc body for any signature in the shared map.
+            var dedupe = (req.DedupeLibraryDocs ?? true) && (req.HydrateEdges ?? true);
+            var libraryDocs = dedupe ? SearchResult.BuildLibraryDocIndex(results) : null;
+            var skipSet = libraryDocs is null ? null : (ISet<string>)new HashSet<string>(libraryDocs.Keys, StringComparer.Ordinal);
+
             if (req.RetrievalText == true)
             {
-                return Results.Ok(results.Select((r, i) => new
+                return Results.Ok(new
                 {
-                    rank = i + 1,
-                    score = r.Score,
-                    chunkId = r.Chunk.Id,
-                    filePath = r.Chunk.FilePath,
-                    lineNumber = r.Chunk.LineNumber,
-                    retrievalText = r.ToRetrievalText(),
-                }));
+                    libraryDocs,
+                    results = results.Select((r, i) => new
+                    {
+                        rank = i + 1,
+                        score = r.Score,
+                        chunkId = r.Chunk.Id,
+                        filePath = r.Chunk.FilePath,
+                        lineNumber = r.Chunk.LineNumber,
+                        retrievalText = r.ToRetrievalText(skipSet),
+                    })
+                });
             }
 
-            return Results.Ok(results.Select(r => SearchResultDto.From(r)));
+            return Results.Ok(new
+            {
+                libraryDocs,
+                results = results.Select(r => SearchResultDto.From(r, skipSet))
+            });
         })
         .WithSummary("Semantic search. Set retrievalText=true for LLM-ready text blocks.");
 
@@ -164,12 +179,13 @@ public static class CodeRagApi
         string? Project = null,
         string? FilePath = null,
         bool? HydrateEdges = null,
-        bool? RetrievalText = null);
+        bool? RetrievalText = null,
+        bool? DedupeLibraryDocs = null);
 
     public record SearchResultDto(double Score, CodeChunk Chunk, List<CodeEdge>? OutgoingEdges, string RetrievalText)
     {
-        public static SearchResultDto From(SearchResult r) =>
-            new(r.Score, r.Chunk, r.OutgoingEdges, r.ToRetrievalText());
+        public static SearchResultDto From(SearchResult r, ISet<string>? skipDocSignatures = null) =>
+            new(r.Score, r.Chunk, r.OutgoingEdges, r.ToRetrievalText(skipDocSignatures));
     }
 
     public record JobDto(
