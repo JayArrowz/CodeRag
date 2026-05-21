@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml.Linq;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Models;
 using Microsoft.Build.Locator;
@@ -54,11 +55,14 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         };
 
         IEnumerable<Project> projects;
-        if (solutionOrProjectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-            || solutionOrProjectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+        if (solutionOrProjectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
         {
             var solution = await msbuildWorkspace.OpenSolutionAsync(solutionOrProjectPath);
             projects = solution.Projects;
+        }
+        else if (solutionOrProjectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            projects = await OpenSlnxProjectsAsync(msbuildWorkspace, solutionOrProjectPath);
         }
         else
         {
@@ -510,6 +514,46 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             .SelectMany(al => al.Attributes)
             .Select(a => a.ToString())
             .ToList();
+    }
+
+    /// <summary>
+    /// Parses a .slnx (XML solution) file and opens each referenced project via MSBuildWorkspace.
+    /// MSBuildWorkspace.OpenSolutionAsync does not support the .slnx format.
+    /// </summary>
+    private static async Task<IEnumerable<Project>> OpenSlnxProjectsAsync(
+        MSBuildWorkspace workspace, string slnxPath)
+    {
+        var slnxDir = Path.GetDirectoryName(slnxPath)!;
+        var doc = XDocument.Load(slnxPath);
+
+        var projectPaths = doc.Descendants()
+            .Where(e => e.Name.LocalName == "Project")
+            .Select(e => e.Attribute("Path")?.Value)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => Path.GetFullPath(Path.Combine(slnxDir, p!)))
+            .Where(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                     || p.EndsWith(".vbproj", StringComparison.OrdinalIgnoreCase)
+                     || p.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var projects = new List<Project>();
+        foreach (var path in projectPaths)
+        {
+            if (!File.Exists(path))
+            {
+                Console.Error.WriteLine($"  Skipping missing project: {path}");
+                continue;
+            }
+
+            var alreadyLoaded = workspace.CurrentSolution.Projects
+                .Any(p => string.Equals(p.FilePath, path, StringComparison.OrdinalIgnoreCase));
+            if (alreadyLoaded) continue;
+
+            await workspace.OpenProjectAsync(path);
+        }
+
+        // Return all projects in the solution, including those loaded transitively.
+        return workspace.CurrentSolution.Projects;
     }
 
     private static void EnsureMSBuildRegistered()

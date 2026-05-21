@@ -61,13 +61,17 @@ public class FileWatcherService : IHostedService, IDisposable
 
     public void Dispose() => StopAsync(CancellationToken.None).GetAwaiter().GetResult();
 
-    public WatchedRoot AddWatch(WatchedRoot w)
+    /// <param name="skipInitialSweep">
+    /// When <c>true</c> the post-registration catch-up sweep is skipped. Pass <c>true</c>
+    /// when the caller just finished indexing the root (nothing stale to sweep).
+    /// </param>
+    public WatchedRoot AddWatch(WatchedRoot w, bool skipInitialSweep = false)
     {
         var added = _persistence.Add(w);
         Log(new WatchEvent(DateTime.UtcNow, added.Id, added.Workspace, added.Path, WatchEventKind.RootAdded, null));
         if (added.Enabled) Attach(added);
-        // Sweep new root immediately so any pre-existing files get indexed/refreshed.
-        _ = Task.Run(() => SweepAsync(added, CancellationToken.None));
+        if (!skipInitialSweep)
+            _ = Task.Run(() => SweepAsync(added, CancellationToken.None));
         return added;
     }
 
