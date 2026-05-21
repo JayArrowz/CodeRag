@@ -1,0 +1,43 @@
+@page "/"
+@inject IVectorStore Store
+
+<PageTitle>CodeRag — Overview</PageTitle>
+
+<h1>Overview</h1>
+
+@if (_stats is null)
+{
+    <p class="muted">Loading…</p>
+}
+else
+{
+    <div class="card-row">
+        <div class="card stat"><span class="v">@_stats.TotalChunks</span><span class="l">Total chunks</span></div>
+        <div class="card stat"><span class="v">@_stats.ByWorkspace.Count</span><span class="l">Workspaces</span></div>
+        <div class="card stat"><span class="v">@_stats.ByLanguage.Count</span><span class="l">Languages</span></div>
+        <div class="card stat"><span class="v">@_stats.ByProject.Count</span><span class="l">Inner projects</span></div>
+    </div>
+
+    <div class="card">
+        <h3>By workspace</h3>
+        <Breakdown Items="@_stats.ByWorkspace" />
+    </div>
+    <div class="card">
+        <h3>By language</h3>
+        <Breakdown Items="@_stats.ByLanguage" />
+    </div>
+    <div class="card">
+        <h3>By kind</h3>
+        <Breakdown Items="@_stats.ByKind" />
+    </div>
+}
+
+@code {
+    StoreStats? _stats;
+    protected override async Task OnInitializedAsync()
+    {
+        try { _stats = await Store.GetStatsAsync(); }
+        catch (Exception ex) { _stats = new StoreStats(); Error = ex.Message; }
+    }
+    string? Error;
+}

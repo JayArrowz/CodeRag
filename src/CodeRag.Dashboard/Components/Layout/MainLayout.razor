@@ -1,0 +1,20 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <aside class="sidebar">
+        <div class="brand">
+            <strong>CodeRag</strong>
+            <span class="brand-sub">dashboard</span>
+        </div>
+        <nav>
+            <NavLink href="" Match="NavLinkMatch.All">Overview</NavLink>
+            <NavLink href="workspaces">Workspaces</NavLink>
+            <NavLink href="search">Search</NavLink>
+            <NavLink href="index">Index</NavLink>
+            <NavLink href="jobs">Jobs</NavLink>
+        </nav>
+    </aside>
+    <main>
+        @Body
+    </main>
+</div>

@@ -1,0 +1,72 @@
+@page "/workspaces"
+@inject IVectorStore Store
+@inject NavigationManager Nav
+
+<PageTitle>Workspaces</PageTitle>
+
+<h1>Workspaces</h1>
+
+@if (_workspaces is null)
+{
+    <p class="muted">Loading…</p>
+}
+else if (_workspaces.Count == 0)
+{
+    <p class="muted">No workspaces indexed yet. Head over to <a href="index">Index</a> to add one.</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Workspace</th>
+                <th>Chunks</th>
+                <th>Edges</th>
+                <th>Languages</th>
+                <th>Projects</th>
+                <th>Last indexed</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var w in _workspaces)
+            {
+                <tr>
+                    <td>
+                        <a href="@($"workspaces/{Uri.EscapeDataString(w.Workspace)}")">
+                            <strong>@w.Workspace</strong>
+                        </a>
+                    </td>
+                    <td>@w.Chunks</td>
+                    <td>@w.Edges</td>
+                    <td>@string.Join(", ", w.ByLanguage.Keys.Take(4))</td>
+                    <td>@w.ByProject.Count</td>
+                    <td>@(w.LastIndexedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                    <td class="row-actions">
+                        <button class="secondary" @onclick="@(() => GoSearch(w.Workspace))">Search</button>
+                        <button class="danger" @onclick="@(() => Drop(w.Workspace))">Drop</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    List<WorkspaceInfo>? _workspaces;
+
+    protected override Task OnInitializedAsync() => Refresh();
+
+    async Task Refresh()
+    {
+        _workspaces = await Store.ListWorkspacesAsync();
+    }
+
+    async Task Drop(string ws)
+    {
+        await Store.DeleteByWorkspaceAsync(ws);
+        await Refresh();
+    }
+
+    void GoSearch(string ws) => Nav.NavigateTo($"search?ws={Uri.EscapeDataString(ws)}");
+}

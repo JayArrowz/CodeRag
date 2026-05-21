@@ -1,0 +1,55 @@
+@page "/workspaces/{Name}"
+@inject IVectorStore Store
+@inject NavigationManager Nav
+
+<PageTitle>Workspace @Name</PageTitle>
+
+<h1>
+    @Name
+    <button class="secondary" style="margin-left:1rem" @onclick="GoSearch">Search this workspace</button>
+    <button class="danger" style="margin-left:0.3rem" @onclick="Drop">Drop workspace</button>
+</h1>
+
+@if (_info is null)
+{
+    <p class="muted">Loading…</p>
+}
+else
+{
+    <div class="card-row">
+        <div class="card stat"><span class="v">@_info.Chunks</span><span class="l">Chunks</span></div>
+        <div class="card stat"><span class="v">@_info.Edges</span><span class="l">Edges</span></div>
+        <div class="card stat">
+            <span class="v">@(_info.LastIndexedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—")</span>
+            <span class="l">Last indexed</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>By language</h3>
+        <Breakdown Items="@_info.ByLanguage" />
+    </div>
+    <div class="card">
+        <h3>By project</h3>
+        <Breakdown Items="@_info.ByProject" />
+    </div>
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = "";
+    WorkspaceInfo? _info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var all = await Store.ListWorkspacesAsync();
+        _info = all.FirstOrDefault(w => w.Workspace == Name);
+    }
+
+    void GoSearch() => Nav.NavigateTo($"search?ws={Uri.EscapeDataString(Name)}");
+
+    async Task Drop()
+    {
+        await Store.DeleteByWorkspaceAsync(Name);
+        Nav.NavigateTo("workspaces");
+    }
+}

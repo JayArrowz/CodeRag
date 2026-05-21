@@ -1,0 +1,107 @@
+@page "/jobs/{Id:guid}"
+@inject IndexingJobService Jobs
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Job @Id</PageTitle>
+
+@if (_job is null)
+{
+    <p class="muted">Job not found. <a href="jobs">Back to jobs</a>.</p>
+}
+else
+{
+    <h1>
+        Job <span class="mono">@Id.ToString().Substring(0, 8)</span>
+        <span style="margin-left:0.5rem"><JobBadge Status="_job.Status" /></span>
+    </h1>
+
+    <div class="card">
+        <dl class="kv">
+            <dt>Kind</dt><dd>@_job.Kind</dd>
+            <dt>Workspace</dt><dd class="mono">@_job.Workspace</dd>
+            <dt>Path</dt><dd class="mono">@_job.Path</dd>
+            @if (_job.ProjectName is not null) { <dt>Project</dt><dd class="mono">@_job.ProjectName</dd> }
+            <dt>Started</dt><dd>@(_job.StartedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</dd>
+            <dt>Finished</dt><dd>@(_job.FinishedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</dd>
+        </dl>
+
+        <div class="row-actions" style="margin-top:0.6rem">
+            @if (_job.Status is JobStatus.Queued or JobStatus.Running)
+            {
+                <button class="danger" @onclick="Cancel">Cancel</button>
+            }
+            else
+            {
+                <button class="secondary" @onclick="Remove">Remove</button>
+            }
+            <a href="jobs"><button class="secondary">Back</button></a>
+        </div>
+    </div>
+
+    @if (_job.Stats is not null)
+    {
+        <div class="card">
+            <h3>Result</h3>
+            <div class="card-row">
+                <div class="card stat"><span class="v">@_job.Stats.TotalFiles</span><span class="l">Files</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.TotalChunks</span><span class="l">Chunks</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.Methods</span><span class="l">Methods</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.Classes</span><span class="l">Classes</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.Properties</span><span class="l">Properties</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.Edges</span><span class="l">Edges</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.InternalEdges</span><span class="l">Internal</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.ExternalEdges</span><span class="l">External</span></div>
+                <div class="card stat"><span class="v">@_job.Stats.Duration.ToString(@"mm\:ss")</span><span class="l">Duration</span></div>
+            </div>
+        </div>
+    }
+
+    @if (_job.Error is not null)
+    {
+        <div class="card" style="color:var(--bad)">
+            <h3>Error</h3>
+            <pre class="code">@_job.Error</pre>
+        </div>
+    }
+
+    <div class="card">
+        <h3>Output</h3>
+        <div class="log">
+@foreach (var line in _logSnapshot)
+{
+    @line@(Environment.NewLine)
+}
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    IndexingJob? _job;
+    List<string> _logSnapshot = new();
+    Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _job = Jobs.Get(Id);
+        if (_job is null) return;
+        SnapshotLog();
+        _timer = new Timer(_ => InvokeAsync(() =>
+        {
+            SnapshotLog();
+            StateHasChanged();
+        }), null, 750, 750);
+    }
+
+    void SnapshotLog()
+    {
+        if (_job is null) return;
+        lock (_job.Log) _logSnapshot = _job.Log.ToList();
+    }
+
+    void Cancel() { if (_job is not null) Jobs.Cancel(_job.Id); }
+    void Remove() { if (_job is not null) { Jobs.Remove(_job.Id); Nav.NavigateTo("jobs"); } }
+
+    public void Dispose() => _timer?.Dispose();
+}

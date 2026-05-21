@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: coderag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d coderag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: src/CodeRag.Dashboard/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Connect to the postgres service over the compose network.
+      CODERAG_CONNECTIONSTRING: "Host=postgres;Database=coderag;Username=postgres;Password=postgres"
+      # Provide via .env or shell. Leave blank to use fake embeddings.
+      CODERAG_OPENAIAPI_KEY: "${CODERAG_OPENAIAPI_KEY:-}"
+      CODERAG_EMBEDDINGMODEL: "${CODERAG_EMBEDDINGMODEL:-text-embedding-3-small}"
+      CODERAG_EMBEDDINGDIMENSIONS: "${CODERAG_EMBEDDINGDIMENSIONS:-1536}"
+      CODERAG_DEFAULTWORKSPACE: "${CODERAG_DEFAULTWORKSPACE:-}"
+      ASPNETCORE_ENVIRONMENT: Production
+    ports:
+      - "5180:8080"
+    volumes:
+      # Mount source folders you want to index from the dashboard.
+      # Paths typed in the Index page must exist *inside* the container.
+      - ./:/workspace:ro
+
+volumes:
+  pgdata:

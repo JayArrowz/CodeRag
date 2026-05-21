@@ -1,0 +1,82 @@
+@page "/index"
+@inject IndexingJobService Jobs
+@inject NavigationManager Nav
+
+<PageTitle>Index</PageTitle>
+
+<h1>Run indexing</h1>
+
+<p class="muted">
+    Kick off an indexing job. The dashboard runs the same pipeline as the CLI.
+    Paths are resolved on the <strong>server</strong>, so they must point to a
+    location accessible by the dashboard process.
+</p>
+
+<div class="card">
+    <h3>Index a solution (.sln)</h3>
+    <div class="form-row">
+        <label>Solution path
+            <input type="text" @bind="SlnPath" placeholder="D:\path\to\MySolution.sln" style="min-width:380px" />
+        </label>
+        <label>Workspace
+            <input type="text" @bind="SlnWorkspace" placeholder="MyApp" />
+        </label>
+        <button @onclick="StartSolution" disabled="@(!CanStartSln)">Start</button>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Index a directory</h3>
+    <div class="form-row">
+        <label>Directory
+            <input type="text" @bind="DirPath" placeholder="D:\path\to\src" style="min-width:380px" />
+        </label>
+        <label>Workspace
+            <input type="text" @bind="DirWorkspace" placeholder="MyApp" />
+        </label>
+        <label>Project (optional)
+            <input type="text" @bind="DirProject" placeholder="MyApp.Web" />
+        </label>
+        <button @onclick="StartDirectory" disabled="@(!CanStartDir)">Start</button>
+    </div>
+</div>
+
+@if (_error is not null)
+{
+    <div class="card" style="color:var(--bad)">@_error</div>
+}
+
+@code {
+    string SlnPath { get; set; } = "";
+    string SlnWorkspace { get; set; } = "";
+    string DirPath { get; set; } = "";
+    string DirWorkspace { get; set; } = "";
+    string DirProject { get; set; } = "";
+    string? _error;
+
+    bool CanStartSln => !string.IsNullOrWhiteSpace(SlnPath) && !string.IsNullOrWhiteSpace(SlnWorkspace);
+    bool CanStartDir => !string.IsNullOrWhiteSpace(DirPath) && !string.IsNullOrWhiteSpace(DirWorkspace);
+
+    void StartSolution()
+    {
+        try
+        {
+            if (!File.Exists(SlnPath)) { _error = $"File not found: {SlnPath}"; return; }
+            var job = Jobs.StartIndexSolution(Path.GetFullPath(SlnPath), SlnWorkspace.Trim());
+            Nav.NavigateTo($"jobs/{job.Id}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    void StartDirectory()
+    {
+        try
+        {
+            if (!Directory.Exists(DirPath)) { _error = $"Directory not found: {DirPath}"; return; }
+            var proj = string.IsNullOrWhiteSpace(DirProject) ? null : DirProject.Trim();
+            var job = Jobs.StartIndexDirectory(Path.GetFullPath(DirPath), DirWorkspace.Trim(), proj);
+            Nav.NavigateTo($"jobs/{job.Id}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+}

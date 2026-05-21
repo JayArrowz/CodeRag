@@ -1,0 +1,22 @@
+@typeparam TValue where TValue : struct, IConvertible
+
+@if (Items is null || Items.Count == 0)
+{
+    <p class="muted">No data.</p>
+}
+else
+{
+    <table>
+        <thead><tr><th>Name</th><th style="width:120px">Count</th></tr></thead>
+        <tbody>
+            @foreach (var kv in Items.OrderByDescending(k => Convert.ToInt64(k.Value)))
+            {
+                <tr><td class="mono">@kv.Key</td><td>@kv.Value</td></tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [Parameter] public Dictionary<string, TValue>? Items { get; set; }
+}

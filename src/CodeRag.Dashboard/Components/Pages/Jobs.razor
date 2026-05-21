@@ -1,0 +1,67 @@
+@page "/jobs"
+@inject IndexingJobService JobSvc
+@implements IDisposable
+
+<PageTitle>Jobs</PageTitle>
+
+<h1>Indexing jobs</h1>
+
+@if (_jobs.Count == 0)
+{
+    <p class="muted">No jobs yet. Start one from the <a href="index">Index</a> page.</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>Kind</th>
+                <th>Workspace</th>
+                <th>Path</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var j in _jobs)
+            {
+                <tr>
+                    <td><JobBadge Status="@j.Status" /></td>
+                    <td>@j.Kind</td>
+                    <td class="mono">@j.Workspace</td>
+                    <td class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@j.Path</td>
+                    <td>@(j.StartedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</td>
+                    <td>@Duration(j)</td>
+                    <td class="row-actions">
+                        <a href="@($"jobs/{j.Id}")"><button class="secondary">View</button></a>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    List<IndexingJob> _jobs = new();
+    Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
+            null, 1000, 1000);
+    }
+
+    void Refresh() => _jobs = JobSvc.Jobs.ToList();
+
+    static string Duration(IndexingJob j)
+    {
+        if (j.StartedAt is null) return "—";
+        var end = j.FinishedAt ?? DateTime.UtcNow;
+        return (end - j.StartedAt.Value).ToString(@"mm\:ss");
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

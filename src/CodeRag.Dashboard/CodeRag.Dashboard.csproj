@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CodeRag.Dashboard</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CodeRag.Core\CodeRag.Core.csproj" />
+    <ProjectReference Include="..\CodeRag.Analyzers\CodeRag.Analyzers.csproj" />
+    <ProjectReference Include="..\CodeRag.Storage\CodeRag.Storage.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,9 @@
+@if (Status == JobStatus.Succeeded)  { <span class="badge ok">succeeded</span>  }
+else if (Status == JobStatus.Failed) { <span class="badge bad">failed</span>     }
+else if (Status == JobStatus.Cancelled) { <span class="badge warn">cancelled</span> }
+else if (Status == JobStatus.Running) { <span class="badge info">running…</span>  }
+else                                  { <span class="badge">queued</span>          }
+
+@code {
+    [Parameter] public JobStatus Status { get; set; }
+}

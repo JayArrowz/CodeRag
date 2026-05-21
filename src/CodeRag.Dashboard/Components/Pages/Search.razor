@@ -1,0 +1,127 @@
+@page "/search"
+@inject IVectorStore Store
+@inject CodebaseIndexer Indexer
+@inject NavigationManager Nav
+
+<PageTitle>Search</PageTitle>
+
+<h1>Semantic search</h1>
+
+<div class="form-row">
+    <label>Query
+        <input type="text" @bind="Query" @bind:event="oninput" style="min-width:340px"
+               @onkeydown="OnKey" placeholder="e.g. authentication middleware" />
+    </label>
+    <label>Workspace
+        <select @bind="Workspace">
+            <option value="">— all —</option>
+            @if (_workspaces is not null)
+            {
+                @foreach (var w in _workspaces)
+                {
+                    <option value="@w.Workspace">@w.Workspace</option>
+                }
+            }
+        </select>
+    </label>
+    <label>Top K
+        <input type="text" @bind="TopK" style="min-width:60px" />
+    </label>
+    <label>Language
+        <input type="text" @bind="Language" placeholder="csharp" />
+    </label>
+    <label>Kind
+        <input type="text" @bind="Kind" placeholder="method_declaration" />
+    </label>
+    <label>Project
+        <input type="text" @bind="Project" placeholder="" />
+    </label>
+    <button @onclick="Run" disabled="@_running">@(_running ? "Searching…" : "Search")</button>
+</div>
+
+@if (_error is not null)
+{
+    <div class="card" style="color:var(--bad)">@_error</div>
+}
+
+@if (_results is not null)
+{
+    <p class="muted">@_results.Count result(s)</p>
+    @foreach (var r in _results)
+    {
+        var c = r.Chunk;
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:1rem">
+                <div>
+                    <strong class="mono">@(c.Signature ?? c.FunctionName)</strong>
+                    <div class="muted mono" style="font-size:0.8rem">
+                        @c.FilePath:@c.LineNumber
+                        — <span class="badge info">@c.Kind</span>
+                        <span class="badge">@c.Language</span>
+                        <span class="badge">ws: @c.Workspace</span>
+                        @if (!string.IsNullOrEmpty(c.ProjectName)) { <span class="badge">@c.ProjectName</span> }
+                    </div>
+                </div>
+                <div class="badge ok">score @r.Score.ToString("0.000")</div>
+            </div>
+            @if (!string.IsNullOrEmpty(c.Documentation))
+            {
+                <div class="muted" style="margin-top:0.4rem">@c.Documentation</div>
+            }
+            @if (!string.IsNullOrEmpty(c.Body))
+            {
+                <details style="margin-top:0.4rem">
+                    <summary class="muted">Body</summary>
+                    <pre class="code">@c.Body</pre>
+                </details>
+            }
+        </div>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "ws")] public string? WsParam { get; set; }
+
+    string Query { get; set; } = "";
+    string Workspace { get; set; } = "";
+    string TopK { get; set; } = "10";
+    string Language { get; set; } = "";
+    string Kind { get; set; } = "";
+    string Project { get; set; } = "";
+
+    List<WorkspaceInfo>? _workspaces;
+    List<SearchResult>? _results;
+    bool _running;
+    string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _workspaces = await Store.ListWorkspacesAsync();
+        if (!string.IsNullOrEmpty(WsParam)) Workspace = WsParam!;
+    }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Run();
+    }
+
+    async Task Run()
+    {
+        if (string.IsNullOrWhiteSpace(Query)) return;
+        _running = true; _error = null;
+        try
+        {
+            int.TryParse(TopK, out var k); if (k <= 0) k = 10;
+            var filter = new SearchFilter
+            {
+                Workspace = string.IsNullOrWhiteSpace(Workspace) ? null : Workspace,
+                Language  = string.IsNullOrWhiteSpace(Language)  ? null : Language,
+                Kind      = string.IsNullOrWhiteSpace(Kind)      ? null : Kind,
+                ProjectName = string.IsNullOrWhiteSpace(Project) ? null : Project,
+            };
+            _results = await Indexer.QueryAsync(Query, k, filter);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _running = false; }
+    }
+}
