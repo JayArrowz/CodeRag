@@ -28,24 +28,24 @@ public class SearchResult
         if (OutgoingEdges is null || OutgoingEdges.Count == 0)
             return text;
 
-        var externals = OutgoingEdges
-            .Where(e => e.IsExternal && !string.IsNullOrWhiteSpace(e.TargetDocumentation))
+        var documented = OutgoingEdges
+            .Where(e => !string.IsNullOrWhiteSpace(e.TargetDocumentation))
             .GroupBy(e => e.TargetSignature)
             .Select(g => g.First())
             .ToList();
 
-        if (externals.Count == 0)
+        if (documented.Count == 0)
             return text;
 
         var sb = new System.Text.StringBuilder(text);
         sb.AppendLine();
-        sb.AppendLine("// --- referenced library APIs ---");
-        foreach (var e in externals)
+        sb.AppendLine("// --- referenced APIs ---");
+        foreach (var e in documented)
         {
             if (skipDocSignatures is not null && skipDocSignatures.Contains(e.TargetSignature))
             {
-                // Doc body lives in the shared library-docs section; just name the call here.
-                sb.AppendLine($"// {e.TargetSignature}  (see referenced library docs)");
+                // Doc body lives in the shared docs section; just name the call here.
+                sb.AppendLine($"// {e.TargetSignature}  (see referenced docs)");
                 continue;
             }
             sb.AppendLine($"// {e.TargetSignature}");
@@ -57,8 +57,9 @@ public class SearchResult
 
     /// <summary>
     /// Build a signature → documentation map across a batch of results, deduplicating
-    /// shared library targets. Pair with <see cref="ToRetrievalText"/> passing the
-    /// returned dictionary's keys to avoid repeating the same XML doc per result.
+    /// shared call targets (both external library APIs and internal project methods).
+    /// Pair with <see cref="ToRetrievalText"/> passing the returned dictionary's keys
+    /// to avoid repeating the same XML doc per result.
     /// </summary>
     public static Dictionary<string, string> BuildLibraryDocIndex(IEnumerable<SearchResult> results)
     {
@@ -68,7 +69,6 @@ public class SearchResult
             if (r.OutgoingEdges is null) continue;
             foreach (var e in r.OutgoingEdges)
             {
-                if (!e.IsExternal) continue;
                 if (string.IsNullOrWhiteSpace(e.TargetDocumentation)) continue;
                 docs.TryAdd(e.TargetSignature, e.TargetDocumentation!);
             }

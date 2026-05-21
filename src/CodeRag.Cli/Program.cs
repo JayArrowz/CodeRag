@@ -175,7 +175,7 @@ async Task Query(string[] args)
 
         if (libDocs.Count > 0)
         {
-            Console.WriteLine("// === referenced library APIs (shared across results) ===");
+            Console.WriteLine("// === referenced APIs (shared across results) ===");
             foreach (var (sig, doc) in libDocs)
             {
                 Console.WriteLine($"// {sig}");
