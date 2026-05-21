@@ -12,16 +12,14 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables("CODERAG_")
     .Build();
 
-var connectionString = config["ConnectionString"]
-    ?? "Host=localhost;Database=coderag;Username=postgres;Password=postgres";
 var openAiKey = config["OpenAiApiKey"] ?? "";
 var embeddingModel = config["EmbeddingModel"] ?? "text-embedding-3-small";
-var embeddingDimensions = int.Parse(config["EmbeddingDimensions"] ?? "1536");
+var embeddingDimensions = int.TryParse(config["EmbeddingDimensions"], out var d) ? d : 1536;
 var defaultWorkspace = config["DefaultWorkspace"]; // optional; used when --workspace omitted on query
 
 var services = new ServiceCollection();
 
-services.AddPgVectorStore(connectionString, embeddingDimensions);
+services.AddPgVectorStore(config);
 
 if (!string.IsNullOrEmpty(openAiKey))
 {

@@ -12,14 +12,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables("CODERAG_");
 
 var config = builder.Configuration;
-var connectionString = config["ConnectionString"]
-    ?? "Host=localhost;Database=coderag;Username=postgres;Password=postgres";
 var openAiKey = config["OpenAiApiKey"] ?? "";
 var embeddingModel = config["EmbeddingModel"] ?? "text-embedding-3-small";
-var embeddingDimensions = int.Parse(config["EmbeddingDimensions"] ?? "1536");
+var embeddingDimensions = int.TryParse(config["EmbeddingDimensions"], out var d) ? d : 1536;
 
 // CodeRag pipeline
-builder.Services.AddPgVectorStore(connectionString, embeddingDimensions);
+builder.Services.AddPgVectorStore(config);
 
 if (!string.IsNullOrEmpty(openAiKey))
 {

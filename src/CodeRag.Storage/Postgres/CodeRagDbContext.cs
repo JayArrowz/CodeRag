@@ -5,6 +5,12 @@ namespace CodeRag.Storage.Postgres;
 
 public class CodeRagDbContext : DbContext
 {
+    /// <summary>
+    /// Embedding vector dimensions used when configuring the pgvector column type.
+    /// Set by <see cref="ServiceCollectionExtensions.AddPgVectorStore"/> at startup.
+    /// </summary>
+    internal static int EmbeddingDimensions = 1536;
+
     public DbSet<CodeChunkEntity> CodeChunks => Set<CodeChunkEntity>();
     public DbSet<CodeEdgeEntity> CodeEdges => Set<CodeEdgeEntity>();
 
@@ -16,6 +22,11 @@ public class CodeRagDbContext : DbContext
 
         modelBuilder.Entity<CodeChunkEntity>(entity =>
         {
+            // pgvector requires a fixed-dimension column type (e.g. vector(1536))
+            // for ivfflat / hnsw indexes to be created.
+            entity.Property(e => e.Embedding)
+                .HasColumnType($"vector({EmbeddingDimensions})");
+
             // Composite index for fast filtering
             entity.HasIndex(e => e.Language).HasDatabaseName("ix_chunks_language");
             entity.HasIndex(e => e.Kind).HasDatabaseName("ix_chunks_kind");

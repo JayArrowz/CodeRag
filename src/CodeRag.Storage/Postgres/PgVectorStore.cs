@@ -28,6 +28,36 @@ public class PgVectorStore : IVectorStore
         // No EF migrations are defined; create the schema from the current model.
         await db.Database.EnsureCreatedAsync(ct);
 
+        // If the table was created previously without a fixed-dimension vector column
+        // (older versions of this code), repair it so ivfflat / hnsw indexes can be built.
+        // ALTER COLUMN is safe even when the type is already correct.
+        var fixDimSql = $"""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'code_chunks' AND column_name = 'embedding'
+                ) THEN
+                    BEGIN
+                        ALTER TABLE code_chunks
+                            ALTER COLUMN embedding TYPE vector({_embeddingDimensions})
+                            USING embedding::vector({_embeddingDimensions});
+                    EXCEPTION WHEN others THEN
+                        -- Likely already vector({_embeddingDimensions}); ignore.
+                        NULL;
+                    END;
+                END IF;
+            END$$;
+            """;
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(fixDimSql, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not enforce embedding column dimension: {ex.Message}");
+        }
+
         // Create the IVFFlat index for vector similarity search if it doesn't exist.
         // We use cosine distance (<=>). Adjust lists count based on your dataset size.
         var indexSql = $"""
