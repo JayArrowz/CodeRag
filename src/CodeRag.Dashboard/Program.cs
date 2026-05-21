@@ -13,22 +13,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables("CODERAG_");
 
 var config = builder.Configuration;
-var openAiKey = config["OpenAiApiKey"] ?? "";
-var embeddingModel = config["EmbeddingModel"] ?? "text-embedding-3-small";
-var embeddingDimensions = int.TryParse(config["EmbeddingDimensions"], out var d) ? d : 1536;
 
 // CodeRag pipeline
 builder.Services.AddPgVectorStore(config);
-
-if (!string.IsNullOrEmpty(openAiKey))
-{
-    builder.Services.AddSingleton<IEmbeddingService>(
-        new OpenAiEmbeddingService(openAiKey, embeddingModel, embeddingDimensions));
-}
-else
-{
-    builder.Services.AddSingleton<IEmbeddingService>(new FakeEmbeddingService(embeddingDimensions));
-}
+builder.Services.AddEmbeddingService(config);
 
 builder.Services.AddSingleton<ILanguageAnalyzer, RoslynAnalyzer>();
 builder.Services.AddSingleton<CodebaseIndexer>();

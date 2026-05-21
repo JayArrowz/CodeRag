@@ -8,8 +8,13 @@
     <ProjectReference Include="..\CodeRag.Core\CodeRag.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+
+    <PackageReference Include="Google_GenerativeAI" Version="3.6.6" />
+
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.8" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.1" />
+    <PackageReference Include="OpenAI" Version="2.10.0" />
     <PackageReference Include="Pgvector" Version="0.3.2" />
     <PackageReference Include="Pgvector.EntityFrameworkCore" Version="0.3.0" />
   </ItemGroup>
