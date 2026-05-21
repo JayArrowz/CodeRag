@@ -23,18 +23,211 @@ internal abstract class VectorStoreBase<TContext> : IVectorStore
         IQueryable<CodeChunkEntity> query, SearchFilter? filter)
     {
         if (filter is null) return query;
-        if (!string.IsNullOrEmpty(filter.Workspace))
-            query = query.Where(c => c.Workspace == filter.Workspace);
-        if (!string.IsNullOrEmpty(filter.Language))
-            query = query.Where(c => c.Language == filter.Language);
-        if (!string.IsNullOrEmpty(filter.ProjectName))
-            query = query.Where(c => c.ProjectName == filter.ProjectName);
-        if (!string.IsNullOrEmpty(filter.Kind))
-            query = query.Where(c => c.Kind == filter.Kind);
-        if (!string.IsNullOrEmpty(filter.FilePath))
-            query = query.Where(c => c.FilePath.Contains(filter.FilePath));
+        if (filter.Workspaces.Count > 0)
+            query = query.Where(c => filter.Workspaces.Contains(c.Workspace));
+        if (filter.Languages.Count > 0)
+            query = query.Where(c => filter.Languages.Contains(c.Language));
+        if (filter.Projects.Count > 0)
+            query = query.Where(c => c.ProjectName != null && filter.Projects.Contains(c.ProjectName));
+        if (filter.Kinds.Count > 0)
+            query = query.Where(c => filter.Kinds.Contains(c.Kind));
+        if (filter.FilePathContains.Count > 0)
+            query = query.Where(c => filter.FilePathContains.Any(p => c.FilePath.Contains(p)));
+        if (filter.ExcludeFilePathContains.Count > 0)
+            query = query.Where(c => !filter.ExcludeFilePathContains.Any(p => c.FilePath.Contains(p)));
         return query;
     }
+
+    public virtual async Task<List<SearchResult>> LexicalSearchAsync(string query, int topK = 10,
+        SearchFilter? filter = null, CancellationToken ct = default)
+    {
+        var terms = ExtractTerms(query, max: 6);
+        if (terms.Count == 0) return new();
+
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var q = ApplyFilter(db.CodeChunks.AsNoTracking(), filter);
+
+        // Pull a pool of candidates matching ANY term in ANY high-signal field. Score in memory.
+        // Using EF Core's translation of List<string>.Any(t => column.Contains(t)) — works on both
+        // Postgres and SQLite. We lowercase the column AND the term so the LIKE is case-insensitive
+        // (Postgres LIKE is case-sensitive by default).
+        var lc = terms.Select(t => t.ToLowerInvariant()).ToList();
+        var pool = await q.Where(c =>
+                lc.Any(t => c.FunctionName.ToLower().Contains(t))
+             || (c.Signature != null      && lc.Any(t => c.Signature.ToLower().Contains(t)))
+             || (c.ClassName != null      && lc.Any(t => c.ClassName.ToLower().Contains(t)))
+             || (c.Namespace != null      && lc.Any(t => c.Namespace.ToLower().Contains(t)))
+             || (c.Documentation != null  && lc.Any(t => c.Documentation.ToLower().Contains(t)))
+             ||                              lc.Any(t => c.FilePath.ToLower().Contains(t)))
+            .Take(Math.Max(topK * 4, 50))
+            .ToListAsync(ct);
+
+        var scored = pool.Select(c =>
+            {
+                double score = 0;
+                var fn = c.FunctionName?.ToLowerInvariant();
+                var cn = c.ClassName?.ToLowerInvariant();
+                var sg = c.Signature?.ToLowerInvariant();
+                var ns = c.Namespace?.ToLowerInvariant();
+                var doc = c.Documentation?.ToLowerInvariant();
+                var fp = c.FilePath?.ToLowerInvariant();
+                foreach (var t in lc)
+                {
+                    if (fn == t) score += 6;
+                    else if (fn?.Contains(t) == true) score += 2;
+                    if (cn == t) score += 5;
+                    else if (cn?.Contains(t) == true) score += 1.5;
+                    if (sg?.Contains(t) == true) score += 2;
+                    if (ns?.Contains(t) == true) score += 0.5;
+                    if (doc?.Contains(t) == true) score += 0.5;
+                    if (fp?.Contains(t) == true) score += 0.5;
+                }
+                return (Chunk: c, Score: score);
+            })
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .Take(topK)
+            .ToList();
+
+        var max = scored.Count > 0 ? scored.Max(x => x.Score) : 1.0;
+        if (max <= 0) max = 1.0;
+
+        return scored.Select(x => new SearchResult
+        {
+            Chunk = VectorStoreMapper.FromEntity(x.Chunk),
+            Score = x.Score / max,  // normalize to 0..1
+        }).ToList();
+    }
+
+    public virtual async Task<List<SearchResult>> ExactSymbolSearchAsync(string symbol, int topK = 5,
+        SearchFilter? filter = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(symbol)) return new();
+
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var q = ApplyFilter(db.CodeChunks.AsNoTracking(), filter);
+
+        var s = symbol.Trim().ToLowerInvariant();
+        // Dotted symbol like "Class.Member" or "Namespace.Class.Member" → split.
+        var dot = s.LastIndexOf('.');
+        string? memberLc = null, classLc = null;
+        if (dot > 0 && dot < s.Length - 1)
+        {
+            memberLc = s[(dot + 1)..];
+            classLc = s[..dot];
+            // strip any namespace prefix in classLc for a relaxed match
+            var lastDot = classLc.LastIndexOf('.');
+            if (lastDot > 0) classLc = classLc[(lastDot + 1)..];
+        }
+
+        var rows = await q.Where(c =>
+                c.FunctionName.ToLower() == s
+             || (c.ClassName != null && c.ClassName.ToLower() == s)
+             || (c.Signature != null && c.Signature.ToLower() == s)
+             || (c.Namespace != null && c.Namespace.ToLower() == s)
+             || (memberLc != null && classLc != null
+                  && c.FunctionName.ToLower() == memberLc
+                  && c.ClassName != null && c.ClassName.ToLower() == classLc))
+            .Take(topK * 3)
+            .ToListAsync(ct);
+
+        // Rank: dotted member-match beats whole-symbol class hit beats whole-symbol function hit.
+        var scored = rows.Select(c =>
+            {
+                double score = 1.0;
+                var fn = c.FunctionName?.ToLowerInvariant();
+                var cn = c.ClassName?.ToLowerInvariant();
+                if (memberLc != null && fn == memberLc && cn == classLc) score = 4.0;
+                else if (cn == s) score = 3.0;
+                else if (fn == s) score = 2.5;
+                else if (c.Signature?.ToLowerInvariant() == s) score = 2.0;
+                return (Chunk: c, Score: score);
+            })
+            .OrderByDescending(x => x.Score)
+            .Take(topK)
+            .ToList();
+
+        var max = scored.Count > 0 ? scored.Max(x => x.Score) : 1.0;
+        return scored.Select(x => new SearchResult
+        {
+            Chunk = VectorStoreMapper.FromEntity(x.Chunk),
+            Score = x.Score / max,
+        }).ToList();
+    }
+
+    public async Task<List<CodeChunk>> GetChunksByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0) return new();
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var idList = ids.ToList();
+        var rows = await db.CodeChunks.AsNoTracking()
+            .Where(c => idList.Contains(c.Id))
+            .ToListAsync(ct);
+        return rows.Select(VectorStoreMapper.FromEntity).ToList();
+    }
+
+    public async Task<List<CodeChunk>> GetChunksByFileAsync(string filePath, string? workspace = null, CancellationToken ct = default)
+    {
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var q = db.CodeChunks.AsNoTracking().Where(c => c.FilePath == filePath);
+        if (!string.IsNullOrEmpty(workspace))
+            q = q.Where(c => c.Workspace == workspace);
+        var rows = await q.ToListAsync(ct);
+        return rows.Select(VectorStoreMapper.FromEntity).ToList();
+    }
+
+    public async Task<CodeChunk?> GetContainingTypeAsync(string workspace, string? @namespace, string className, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(className)) return null;
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var typeKinds = SearchFilter.TypeKinds;
+        var q = db.CodeChunks.AsNoTracking().Where(c =>
+            c.Workspace == workspace
+            && c.ClassName == className
+            && typeKinds.Contains(c.Kind));
+        if (!string.IsNullOrEmpty(@namespace))
+            q = q.Where(c => c.Namespace == @namespace);
+        var row = await q.FirstOrDefaultAsync(ct);
+        return row is null ? null : VectorStoreMapper.FromEntity(row);
+    }
+
+    /// <summary>
+    /// Split a free-form query into identifier-shaped terms. Strips short / stopword
+    /// tokens and also produces camelCase / snake_case sub-tokens so a query like
+    /// <c>"FileWatcherService"</c> matches <c>"file"</c>, <c>"watcher"</c>, <c>"service"</c>.
+    /// </summary>
+    private static List<string> ExtractTerms(string query, int max = 6)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return new();
+        var raw = System.Text.RegularExpressions.Regex
+            .Matches(query, @"[A-Za-z_][A-Za-z0-9_]+")
+            .Select(m => m.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var terms = new List<string>();
+        foreach (var t in raw)
+        {
+            if (t.Length < 2 || IsStopword(t)) continue;
+            terms.Add(t);
+            // also split camelCase / PascalCase
+            var sub = System.Text.RegularExpressions.Regex
+                .Matches(t, @"[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z]|$)")
+                .Select(m => m.Value)
+                .Where(s => s.Length >= 3 && !IsStopword(s));
+            terms.AddRange(sub);
+        }
+        return terms.Distinct(StringComparer.OrdinalIgnoreCase).Take(max).ToList();
+    }
+
+    private static readonly HashSet<string> _stop = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the","a","an","is","are","was","were","of","to","in","on","for","and","or",
+        "with","by","at","be","this","that","it","as","from","do","does","how","what",
+        "where","when","why","which","who","i","you","my","your","get","set"
+    };
+    private static bool IsStopword(string s) => _stop.Contains(s);
+
 
     public async Task UpsertAsync(IReadOnlyList<CodeChunk> chunks, CancellationToken ct = default)
     {

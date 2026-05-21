@@ -57,23 +57,46 @@ public static class CodeRagApi
 
             var filter = new SearchFilter
             {
-                Workspace = req.AllWorkspaces ? null : req.Workspace,
-                Language = req.Language,
-                Kind = req.Kind,
-                ProjectName = req.Project,
-                FilePath = req.FilePath,
+                Workspaces = req.AllWorkspaces
+                    ? new()
+                    : (req.Workspaces ?? (string.IsNullOrEmpty(req.Workspace) ? new() : new() { req.Workspace! })),
+                Languages = req.Languages ?? (string.IsNullOrEmpty(req.Language) ? new() : new() { req.Language! }),
+                Projects = req.Projects ?? (string.IsNullOrEmpty(req.Project) ? new() : new() { req.Project! }),
+                Kinds = req.Kinds ?? (string.IsNullOrEmpty(req.Kind) ? new() : new() { req.Kind! }),
+                FilePathContains = req.FilePathContains ?? (string.IsNullOrEmpty(req.FilePath) ? new() : new() { req.FilePath! }),
+                ExcludeFilePathContains = req.ExcludeFilePathContains ?? new(),
             };
 
-            var results = await indexer.QueryAsync(
-                req.Query, req.TopK ?? 10, filter,
-                hydrateEdges: req.HydrateEdges ?? true, ct);
+            var options = new QueryOptions
+            {
+                TopK = req.TopK ?? 10,
+                Filter = filter,
+                CandidateMultiplier = req.CandidateMultiplier ?? 4,
+                EnableSymbolMatch = req.EnableSymbolMatch ?? true,
+                EnableVector = req.EnableVector ?? true,
+                EnableLexical = req.EnableLexical ?? true,
+                RrfK = req.RrfK ?? 60,
+                SymbolMaxHits = req.SymbolMaxHits ?? 3,
+                MinVectorScore = req.MinVectorScore ?? 0.30,
+                DiversifyResults = req.DiversifyResults ?? true,
+                MaxPerFile = req.MaxPerFile ?? 2,
+                MaxPerClass = req.MaxPerClass ?? 3,
+                ExpandNeighbors = req.ExpandNeighbors ?? true,
+                IncludeContainingType = req.IncludeContainingType ?? true,
+                IncludeIncomingEdges = req.IncludeIncomingEdges ?? true,
+                MaxIncomingEdges = req.MaxIncomingEdges ?? 8,
+                HydrateOutgoingEdges = req.HydrateEdges ?? true,
+                TokenBudgetPerResult = req.TokenBudgetPerResult ?? 800,
+                EmbeddingQueryOverride = req.EmbeddingQueryOverride,
+            };
 
-            // When edges are hydrated, lift shared library docs out so callers (incl. an MCP server)
-            // don't get the same XML comment N times. Per-result retrievalText emits a back-reference
-            // instead of the full doc body for any signature in the shared map.
-            var dedupe = (req.DedupeLibraryDocs ?? true) && (req.HydrateEdges ?? true);
+            var results = await indexer.QueryAsync(req.Query, options, ct);
+
+            // Dedupe shared library docs across the batch so the prompt doesn't repeat XML comments.
+            var dedupe = (req.DedupeLibraryDocs ?? true) && options.HydrateOutgoingEdges;
             var libraryDocs = dedupe ? SearchResult.BuildLibraryDocIndex(results) : null;
             var skipSet = libraryDocs is null ? null : (ISet<string>)new HashSet<string>(libraryDocs.Keys, StringComparer.Ordinal);
+            var budget = options.TokenBudgetPerResult;
 
             if (req.RetrievalText == true)
             {
@@ -84,10 +107,11 @@ public static class CodeRagApi
                     {
                         rank = i + 1,
                         score = r.Score,
+                        sourceScores = r.SourceScores,
                         chunkId = r.Chunk.Id,
                         filePath = r.Chunk.FilePath,
                         lineNumber = r.Chunk.LineNumber,
-                        retrievalText = r.ToRetrievalText(skipSet),
+                        retrievalText = r.ToRetrievalText(skipSet, budget),
                     })
                 });
             }
@@ -95,10 +119,10 @@ public static class CodeRagApi
             return Results.Ok(new
             {
                 libraryDocs,
-                results = results.Select(r => SearchResultDto.From(r, skipSet))
+                results = results.Select(r => SearchResultDto.From(r, skipSet, budget))
             });
         })
-        .WithSummary("Semantic search. Set retrievalText=true for LLM-ready text blocks.");
+        .WithSummary("Hybrid AI-context search: vector + lexical + symbol fast-path, fused with RRF, plus neighborhood expansion and outgoing-edge hydration. Returns LLM-ready text blocks when retrievalText=true.");
 
         // ----- stats / workspaces -----
         api.MapGet("/stats", async (IVectorStore store, CancellationToken ct) =>
@@ -221,21 +245,52 @@ public static class CodeRagApi
 
     public record QueryRequest(
         string Query,
+        // Scope (single-value sugar + multi-value)
         string? Workspace = null,
+        List<string>? Workspaces = null,
         bool AllWorkspaces = false,
-        int? TopK = null,
         string? Language = null,
-        string? Kind = null,
+        List<string>? Languages = null,
         string? Project = null,
+        List<string>? Projects = null,
+        string? Kind = null,
+        List<string>? Kinds = null,
         string? FilePath = null,
+        List<string>? FilePathContains = null,
+        List<string>? ExcludeFilePathContains = null,
+        // Pipeline knobs
+        int? TopK = null,
+        int? CandidateMultiplier = null,
+        bool? EnableSymbolMatch = null,
+        bool? EnableVector = null,
+        bool? EnableLexical = null,
+        int? RrfK = null,
+        int? SymbolMaxHits = null,
+        double? MinVectorScore = null,
+        bool? DiversifyResults = null,
+        int? MaxPerFile = null,
+        int? MaxPerClass = null,
+        bool? ExpandNeighbors = null,
+        bool? IncludeContainingType = null,
+        bool? IncludeIncomingEdges = null,
+        int? MaxIncomingEdges = null,
         bool? HydrateEdges = null,
+        int? TokenBudgetPerResult = null,
+        string? EmbeddingQueryOverride = null,
+        // Output shaping
         bool? RetrievalText = null,
         bool? DedupeLibraryDocs = null);
 
-    public record SearchResultDto(double Score, CodeChunk Chunk, List<CodeEdge>? OutgoingEdges, string RetrievalText)
+    public record SearchResultDto(
+        double Score, CodeChunk Chunk,
+        List<CodeEdge>? OutgoingEdges, List<CodeEdge>? IncomingEdges,
+        List<RelatedChunk>? RelatedChunks,
+        Dictionary<string, double>? SourceScores,
+        string RetrievalText)
     {
-        public static SearchResultDto From(SearchResult r, ISet<string>? skipDocSignatures = null) =>
-            new(r.Score, r.Chunk, r.OutgoingEdges, r.ToRetrievalText(skipDocSignatures));
+        public static SearchResultDto From(SearchResult r, ISet<string>? skipDocSignatures = null, int tokenBudget = 0) =>
+            new(r.Score, r.Chunk, r.OutgoingEdges, r.IncomingEdges, r.RelatedChunks, r.SourceScores,
+                r.ToRetrievalText(skipDocSignatures, tokenBudget));
     }
 
     public record JobDto(

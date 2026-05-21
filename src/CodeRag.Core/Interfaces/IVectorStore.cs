@@ -25,9 +25,44 @@ public interface IVectorStore : IAsyncDisposable
 
     /// <summary>
     /// Search for the top-k most similar chunks to the given query embedding.
+    /// Results carry a normalized cosine-similarity score (0..1, higher = better).
     /// </summary>
     Task<List<SearchResult>> SearchAsync(float[] queryEmbedding, int topK = 10,
         SearchFilter? filter = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Keyword / identifier search over function names, signatures, class names,
+    /// namespaces, documentation, and file paths. Returns up to <paramref name="topK"/>
+    /// chunks with a lexical relevance score normalized to 0..1. Use alongside the
+    /// vector search and fuse with RRF for hybrid retrieval that catches symbol-name
+    /// queries vectors typically miss.
+    /// </summary>
+    Task<List<SearchResult>> LexicalSearchAsync(string query, int topK = 10,
+        SearchFilter? filter = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Exact-identifier lookup. Returns chunks whose <c>FunctionName</c>, <c>ClassName</c>,
+    /// <c>Signature</c>, or <c>Namespace</c> exactly equals (case-insensitive) the symbol —
+    /// or, for dotted symbols like <c>Foo.Bar</c>, where ClassName=Foo and FunctionName=Bar.
+    /// Used as a fast-path so a user query like "FileWatcherService.AddWatch" surfaces
+    /// the exact definition at rank 1.
+    /// </summary>
+    Task<List<SearchResult>> ExactSymbolSearchAsync(string symbol, int topK = 5,
+        SearchFilter? filter = null, CancellationToken ct = default);
+
+    /// <summary>Fetch chunks by id (preserves duplicates-free behavior).</summary>
+    Task<List<CodeChunk>> GetChunksByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
+
+    /// <summary>
+    /// Fetch all chunks in a file (used for sibling-method expansion).
+    /// </summary>
+    Task<List<CodeChunk>> GetChunksByFileAsync(string filePath, string? workspace = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Find the type-declaration chunk that contains a member: same workspace + same
+    /// <paramref name="className"/> with a TypeKind. Returns null if not indexed.
+    /// </summary>
+    Task<CodeChunk?> GetContainingTypeAsync(string workspace, string? @namespace, string className, CancellationToken ct = default);
 
     /// <summary>
     /// Return edges originating from the given chunk (what it calls / creates / etc.).

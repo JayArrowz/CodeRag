@@ -114,24 +114,221 @@ public class CodebaseIndexer
     }
 
     /// <summary>
-    /// Run a semantic query. By default, each result is hydrated with its outgoing
-    /// edges so <see cref="SearchResult.ToRetrievalText"/> includes inline documentation
-    /// for external library calls — ideal for feeding to an LLM.
-    /// Set <paramref name="hydrateEdges"/> to <c>false</c> for a cheaper, chunk-only search.
+    /// Full hybrid retrieval pipeline tuned for AI context generation:
+    /// <list type="number">
+    ///   <item>Symbol-exact fast path (identifier-shaped queries pin direct hits at the top).</item>
+    ///   <item>Vector ANN search over embeddings (overfetched candidate pool).</item>
+    ///   <item>Lexical search over names / signatures / docs / paths.</item>
+    ///   <item>Reciprocal Rank Fusion of the two candidate lists.</item>
+    ///   <item>Score-threshold pruning of weak vector matches.</item>
+    ///   <item>Diversity cap (per file / per class) so one neighborhood can't dominate.</item>
+    ///   <item>Neighborhood expansion (containing type + incoming edges) per result.</item>
+    ///   <item>Outgoing-edge hydration so <see cref="SearchResult.ToRetrievalText"/> can
+    ///         include external-library docs.</item>
+    /// </list>
+    /// Every stage is individually toggleable via <see cref="QueryOptions"/>.
     /// </summary>
-    public async Task<List<SearchResult>> QueryAsync(string query, int topK = 10,
-        SearchFilter? filter = null, bool hydrateEdges = true, CancellationToken ct = default)
+    public async Task<List<SearchResult>> QueryAsync(string query, QueryOptions? options = null,
+        CancellationToken ct = default)
     {
-        var embedding = await _embeddingService.EmbedAsync(query, ct);
-        var results = await _vectorStore.SearchAsync(embedding, topK, filter, ct);
+        options ??= new QueryOptions();
+        var topK = Math.Max(1, options.TopK);
+        var pool = Math.Max(topK + 10, topK * Math.Max(1, options.CandidateMultiplier));
+        var filter = options.Filter;
 
-        if (hydrateEdges)
+        // --- 1. symbol-exact fast path ---
+        var symbolHits = new List<SearchResult>();
+        if (options.EnableSymbolMatch && LooksLikeSymbol(query))
         {
-            foreach (var r in results)
+            symbolHits = await _vectorStore.ExactSymbolSearchAsync(
+                query.Trim(), options.SymbolMaxHits, filter, ct);
+            foreach (var s in symbolHits)
+                s.SourceScores = new() { ["symbol"] = s.Score };
+        }
+
+        // --- 2. vector ---
+        var vectorHits = new List<SearchResult>();
+        if (options.EnableVector)
+        {
+            var embedQuery = string.IsNullOrWhiteSpace(options.EmbeddingQueryOverride)
+                ? query : options.EmbeddingQueryOverride!;
+            var embedding = await _embeddingService.EmbedAsync(embedQuery, ct);
+            vectorHits = await _vectorStore.SearchAsync(embedding, pool, filter, ct);
+            foreach (var v in vectorHits)
+                v.SourceScores = new() { ["vector"] = v.Score };
+        }
+
+        // --- 3. lexical ---
+        var lexicalHits = new List<SearchResult>();
+        if (options.EnableLexical)
+        {
+            lexicalHits = await _vectorStore.LexicalSearchAsync(query, pool, filter, ct);
+            foreach (var l in lexicalHits)
+                l.SourceScores = new() { ["lexical"] = l.Score };
+        }
+
+        // --- 4. RRF fuse vector + lexical ---
+        var fused = ReciprocalRankFusion(
+            new[] { vectorHits, lexicalHits },
+            options.RrfK);
+
+        // --- 5. score threshold (only prunes pure vector matches; symbol hits exempt) ---
+        if (options.MinVectorScore > 0)
+        {
+            var symbolIds = symbolHits.Select(s => s.Chunk.Id).ToHashSet();
+            fused = fused
+                .Where(r => symbolIds.Contains(r.Chunk.Id)
+                    || (r.SourceScores?.GetValueOrDefault("vector") ?? 0) >= options.MinVectorScore
+                    || (r.SourceScores?.GetValueOrDefault("lexical") ?? 0) > 0)
+                .ToList();
+        }
+
+        // --- 6. merge symbol hits at the top, dedupe by chunk id ---
+        var seen = new HashSet<Guid>();
+        var merged = new List<SearchResult>();
+        foreach (var r in symbolHits.Concat(fused))
+        {
+            if (seen.Add(r.Chunk.Id))
+                merged.Add(r);
+        }
+
+        // --- 7. diversity cap ---
+        if (options.DiversifyResults)
+            merged = ApplyDiversityCap(merged, options.MaxPerFile, options.MaxPerClass);
+
+        var top = merged.Take(topK).ToList();
+
+        // --- 8. neighborhood expansion ---
+        if (options.ExpandNeighbors)
+            await ExpandNeighborhoodAsync(top, options, ct);
+
+        // --- 9. outgoing edge hydration ---
+        if (options.HydrateOutgoingEdges)
+        {
+            foreach (var r in top)
                 r.OutgoingEdges = await _vectorStore.GetOutgoingEdgesAsync(r.Chunk.Id, ct);
         }
 
-        return results;
+        return top;
+    }
+
+    /// <summary>
+    /// Reciprocal Rank Fusion: combine multiple ranked candidate lists into one.
+    /// score = Σ_i 1 / (k + rank_i). Robust to score scale differences across sources.
+    /// </summary>
+    private static List<SearchResult> ReciprocalRankFusion(
+        IEnumerable<IReadOnlyList<SearchResult>> rankedLists, int k)
+    {
+        var byId = new Dictionary<Guid, SearchResult>();
+        var fused = new Dictionary<Guid, double>();
+
+        foreach (var list in rankedLists)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                var r = list[i];
+                var id = r.Chunk.Id;
+                var contribution = 1.0 / (k + i + 1);
+                fused[id] = fused.TryGetValue(id, out var prev) ? prev + contribution : contribution;
+
+                if (byId.TryGetValue(id, out var existing))
+                {
+                    if (r.SourceScores is not null)
+                    {
+                        existing.SourceScores ??= new();
+                        foreach (var kv in r.SourceScores)
+                            existing.SourceScores[kv.Key] = kv.Value;
+                    }
+                }
+                else
+                {
+                    byId[id] = r;
+                }
+            }
+        }
+
+        return fused
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv =>
+            {
+                var r = byId[kv.Key];
+                r.Score = kv.Value;
+                return r;
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Greedy diversity filter: enforces a per-file and per-class cap so the prompt
+    /// doesn't end up dominated by one neighborhood.
+    /// </summary>
+    private static List<SearchResult> ApplyDiversityCap(
+        List<SearchResult> ranked, int maxPerFile, int maxPerClass)
+    {
+        var perFile = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var perClass = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var kept = new List<SearchResult>();
+
+        foreach (var r in ranked)
+        {
+            var fileKey = r.Chunk.FilePath ?? "";
+            var classKey = $"{r.Chunk.Namespace}|{r.Chunk.ClassName}";
+
+            var fc = perFile.GetValueOrDefault(fileKey);
+            var cc = perClass.GetValueOrDefault(classKey);
+            if (maxPerFile > 0 && fc >= maxPerFile) continue;
+            if (maxPerClass > 0 && !string.IsNullOrEmpty(r.Chunk.ClassName) && cc >= maxPerClass) continue;
+
+            perFile[fileKey] = fc + 1;
+            perClass[classKey] = cc + 1;
+            kept.Add(r);
+        }
+        return kept;
+    }
+
+    /// <summary>
+    /// Attach the containing type chunk and incoming-edge list to each result so the
+    /// LLM sees both the immediate code AND the surrounding contract.
+    /// </summary>
+    private async Task ExpandNeighborhoodAsync(
+        List<SearchResult> results, QueryOptions opts, CancellationToken ct)
+    {
+        foreach (var r in results)
+        {
+            var c = r.Chunk;
+
+            if (opts.IncludeContainingType
+                && !string.IsNullOrEmpty(c.ClassName)
+                && !SearchFilter.TypeKinds.Contains(c.Kind))
+            {
+                var typeChunk = await _vectorStore.GetContainingTypeAsync(
+                    c.Workspace, c.Namespace, c.ClassName!, ct);
+                if (typeChunk is not null && typeChunk.Id != c.Id)
+                {
+                    r.RelatedChunks ??= new();
+                    r.RelatedChunks.Add(new RelatedChunk { Chunk = typeChunk, Relation = "containing-type" });
+                }
+            }
+
+            if (opts.IncludeIncomingEdges)
+            {
+                var inEdges = await _vectorStore.GetIncomingEdgesAsync(c.Id, ct);
+                if (inEdges.Count > 0)
+                    r.IncomingEdges = inEdges.Take(opts.MaxIncomingEdges).ToList();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Heuristic: query looks like a code identifier when it's a single dotted token
+    /// of letters / digits / underscores. Triggers the exact-symbol fast path.
+    /// </summary>
+    private static bool LooksLikeSymbol(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return false;
+        var q = query.Trim();
+        if (q.Length > 200) return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(q, @"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$");
     }
 
     private async Task EmbedAndStore(List<CodeChunk> chunks, List<CodeEdge> edges,

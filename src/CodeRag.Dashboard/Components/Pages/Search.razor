@@ -5,12 +5,15 @@
 
 <PageTitle>Search</PageTitle>
 
-<h1>Semantic search</h1>
+<h1>Hybrid search</h1>
+<p class="muted" style="margin-top:-0.5rem">
+    Vector + lexical + symbol fast-path, fused with RRF, with neighborhood expansion. This is what an LLM client gets through <code>POST /api/query</code>.
+</p>
 
 <div class="form-row">
     <label>Query
         <input type="text" @bind="Query" @bind:event="oninput" style="min-width:340px"
-               @onkeydown="OnKey" placeholder="e.g. authentication middleware" />
+               @onkeydown="OnKey" placeholder="e.g. authentication middleware, or FileWatcherService.AddWatch" />
     </label>
     <label>Workspace
         <select @bind="Workspace">
@@ -39,6 +42,36 @@
     <button @onclick="Run" disabled="@_running">@(_running ? "Searching…" : "Search")</button>
 </div>
 
+<details style="margin-top:0.6rem">
+    <summary class="muted">Advanced pipeline settings</summary>
+    <div class="form-row" style="margin-top:0.4rem">
+        <label><input type="checkbox" @bind="EnableSymbolMatch" /> symbol fast-path</label>
+        <label><input type="checkbox" @bind="EnableVector" /> vector</label>
+        <label><input type="checkbox" @bind="EnableLexical" /> lexical</label>
+        <label><input type="checkbox" @bind="DiversifyResults" /> diversify</label>
+        <label><input type="checkbox" @bind="ExpandNeighbors" /> expand neighbors</label>
+        <label><input type="checkbox" @bind="IncludeContainingType" /> containing type</label>
+        <label><input type="checkbox" @bind="IncludeIncomingEdges" /> incoming edges</label>
+        <label><input type="checkbox" @bind="HydrateEdges" /> outgoing edges</label>
+    </div>
+    <div class="form-row">
+        <label>Candidate× <input type="text" @bind="CandidateMultiplier" style="width:50px" /></label>
+        <label>RRF k <input type="text" @bind="RrfK" style="width:50px" /></label>
+        <label>Min vec score <input type="text" @bind="MinVectorScore" style="width:60px" /></label>
+        <label>Max/file <input type="text" @bind="MaxPerFile" style="width:50px" /></label>
+        <label>Max/class <input type="text" @bind="MaxPerClass" style="width:50px" /></label>
+        <label>Token budget <input type="text" @bind="TokenBudget" style="width:60px" /></label>
+    </div>
+    <div class="form-row">
+        <label>Exclude paths (comma-sep)
+            <input type="text" @bind="ExcludePaths" style="min-width:260px" placeholder="tests/, examples/" />
+        </label>
+        <label>Embedding query override
+            <input type="text" @bind="EmbedOverride" style="min-width:260px" placeholder="(optional) rewritten query for the embedder" />
+        </label>
+    </div>
+</details>
+
 @if (_error is not null)
 {
     <div class="card" style="color:var(--bad)">@_error</div>
@@ -62,7 +95,18 @@
                         @if (!string.IsNullOrEmpty(c.ProjectName)) { <span class="badge">@c.ProjectName</span> }
                     </div>
                 </div>
-                <div class="badge ok">score @r.Score.ToString("0.000")</div>
+                <div style="display:flex;flex-direction:column;gap:0.2rem;align-items:flex-end">
+                    <div class="badge ok">score @r.Score.ToString("0.000")</div>
+                    @if (r.SourceScores is not null)
+                    {
+                        <div style="display:flex;gap:0.3rem;flex-wrap:wrap;justify-content:flex-end">
+                            @foreach (var kv in r.SourceScores)
+                            {
+                                <span class="badge mono" title="@kv.Key score">@kv.Key:@kv.Value.ToString("0.00")</span>
+                            }
+                        </div>
+                    }
+                </div>
             </div>
             @if (!string.IsNullOrEmpty(c.Documentation))
             {
@@ -78,6 +122,44 @@
                     }
                 </div>
             }
+            @if (r.RelatedChunks is { Count: > 0 })
+            {
+                <div style="margin-top:0.4rem">
+                    <span class="muted" style="font-size:0.8rem">Related</span>
+                    @foreach (var rc in r.RelatedChunks)
+                    {
+                        <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
+                            <span class="badge">@rc.Relation</span>
+                            @(rc.Chunk.Signature ?? rc.Chunk.FunctionName)
+                            <span class="muted">— @rc.Chunk.FilePath:@rc.Chunk.LineNumber</span>
+                        </div>
+                    }
+                </div>
+            }
+            @if (r.IncomingEdges is { Count: > 0 })
+            {
+                <details style="margin-top:0.4rem">
+                    <summary class="muted">@r.IncomingEdges.Count caller(s)</summary>
+                    @foreach (var e in r.IncomingEdges)
+                    {
+                        <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
+                            @(e.SourceSignature ?? "?") <span class="muted">— @e.FilePath:@e.LineNumber</span>
+                        </div>
+                    }
+                </details>
+            }
+            @if (r.OutgoingEdges is { Count: > 0 })
+            {
+                <details style="margin-top:0.4rem">
+                    <summary class="muted">@r.OutgoingEdges.Count outgoing call(s)</summary>
+                    @foreach (var e in r.OutgoingEdges)
+                    {
+                        <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
+                            @(e.TargetSignature ?? e.TargetFunctionName) <span class="muted">— @(e.IsLibraryCall ? "library" : "internal")</span>
+                        </div>
+                    }
+                </details>
+            }
             @if (!string.IsNullOrEmpty(c.Body))
             {
                 <details style="margin-top:0.4rem">
@@ -85,6 +167,10 @@
                     <pre class="code">@c.Body</pre>
                 </details>
             }
+            <details style="margin-top:0.4rem">
+                <summary class="muted">LLM retrieval text (token budget: @TokenBudget)</summary>
+                <pre class="code">@r.ToRetrievalText(null, ParseInt(TokenBudget, 800))</pre>
+            </details>
         </div>
     }
 }
@@ -98,6 +184,24 @@
     string Language { get; set; } = "";
     string Kind { get; set; } = "";
     string Project { get; set; } = "";
+
+    // Advanced
+    bool EnableSymbolMatch { get; set; } = true;
+    bool EnableVector { get; set; } = true;
+    bool EnableLexical { get; set; } = true;
+    bool DiversifyResults { get; set; } = true;
+    bool ExpandNeighbors { get; set; } = true;
+    bool IncludeContainingType { get; set; } = true;
+    bool IncludeIncomingEdges { get; set; } = true;
+    bool HydrateEdges { get; set; } = true;
+    string CandidateMultiplier { get; set; } = "4";
+    string RrfK { get; set; } = "60";
+    string MinVectorScore { get; set; } = "0.30";
+    string MaxPerFile { get; set; } = "2";
+    string MaxPerClass { get; set; } = "3";
+    string TokenBudget { get; set; } = "800";
+    string ExcludePaths { get; set; } = "";
+    string EmbedOverride { get; set; } = "";
 
     List<WorkspaceInfo>? _workspaces;
     List<SearchResult>? _results;
@@ -115,21 +219,49 @@
         if (e.Key == "Enter") await Run();
     }
 
+    static int ParseInt(string s, int fallback) => int.TryParse(s, out var v) && v > 0 ? v : fallback;
+    static double ParseDouble(string s, double fallback) =>
+        double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
     async Task Run()
     {
         if (string.IsNullOrWhiteSpace(Query)) return;
         _running = true; _error = null;
         try
         {
-            int.TryParse(TopK, out var k); if (k <= 0) k = 10;
             var filter = new SearchFilter
             {
                 Workspace = string.IsNullOrWhiteSpace(Workspace) ? null : Workspace,
                 Language  = string.IsNullOrWhiteSpace(Language)  ? null : Language,
                 Kind      = string.IsNullOrWhiteSpace(Kind)      ? null : Kind,
                 ProjectName = string.IsNullOrWhiteSpace(Project) ? null : Project,
+                ExcludeFilePathContains = string.IsNullOrWhiteSpace(ExcludePaths)
+                    ? new()
+                    : ExcludePaths.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
             };
-            _results = await Indexer.QueryAsync(Query, k, filter);
+
+            var opts = new QueryOptions
+            {
+                TopK = ParseInt(TopK, 10),
+                Filter = filter,
+                CandidateMultiplier = ParseInt(CandidateMultiplier, 4),
+                EnableSymbolMatch = EnableSymbolMatch,
+                EnableVector = EnableVector,
+                EnableLexical = EnableLexical,
+                RrfK = ParseInt(RrfK, 60),
+                MinVectorScore = ParseDouble(MinVectorScore, 0.30),
+                DiversifyResults = DiversifyResults,
+                MaxPerFile = ParseInt(MaxPerFile, 2),
+                MaxPerClass = ParseInt(MaxPerClass, 3),
+                ExpandNeighbors = ExpandNeighbors,
+                IncludeContainingType = IncludeContainingType,
+                IncludeIncomingEdges = IncludeIncomingEdges,
+                HydrateOutgoingEdges = HydrateEdges,
+                TokenBudgetPerResult = ParseInt(TokenBudget, 800),
+                EmbeddingQueryOverride = string.IsNullOrWhiteSpace(EmbedOverride) ? null : EmbedOverride,
+            };
+
+            _results = await Indexer.QueryAsync(Query, opts);
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _running = false; }

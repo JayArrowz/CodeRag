@@ -13,45 +13,107 @@ public class SearchResult
     public List<CodeEdge>? OutgoingEdges { get; set; }
 
     /// <summary>
-    /// Full text passed to an LLM as retrieval context. Includes the chunk's
-    /// own retrieval text plus, when <see cref="OutgoingEdges"/> is populated,
-    /// inline docs for any external (library) calls the chunk makes.
+    /// Incoming edges (who calls / inherits from this chunk). Hydrated by the
+    /// retrieval pipeline so an AI consumer can reason about blast radius.
+    /// </summary>
+    public List<CodeEdge>? IncomingEdges { get; set; }
+
+    /// <summary>
+    /// Neighborhood chunks attached during pipeline expansion: the containing class
+    /// of a method, sibling members in the same class, etc. Each is paired with a
+    /// short relationship tag (e.g. <c>"containing-type"</c>, <c>"sibling"</c>).
+    /// </summary>
+    public List<RelatedChunk>? RelatedChunks { get; set; }
+
+    /// <summary>
+    /// Optional per-source raw scores (for diagnostics / re-tuning). Keys are
+    /// <c>"vector"</c>, <c>"lexical"</c>, <c>"symbol"</c>; values are 0..1.
+    /// </summary>
+    public Dictionary<string, double>? SourceScores { get; set; }
+
+    /// <summary>
+    /// Full text returned when this chunk is retrieved as context for an LLM prompt.
     /// </summary>
     /// <param name="skipDocSignatures">
-    /// When provided, the docs for any target signatures in this set are emitted as
-    /// signature-only lines (no doc body). Used to dedupe library docs across a batch
-    /// of <see cref="SearchResult"/>s — see <see cref="BuildLibraryDocIndex"/>.
+    /// Signatures whose external doc body should be emitted as a back-reference only
+    /// (used to dedupe shared library docs across a batch — see <see cref="BuildLibraryDocIndex"/>).
     /// </param>
-    public string ToRetrievalText(ISet<string>? skipDocSignatures = null)
+    /// <param name="tokenBudget">
+    /// Approximate per-result token cap (~4 chars/token). When the chunk body would
+    /// blow this budget the body is replaced with its summary, and remaining sections
+    /// are appended only while space remains. 0 = no cap.
+    /// </param>
+    public string ToRetrievalText(ISet<string>? skipDocSignatures = null, int tokenBudget = 0)
     {
-        var text = Chunk.ToRetrievalText();
-        if (OutgoingEdges is null || OutgoingEdges.Count == 0)
-            return text;
-
-        var documented = OutgoingEdges
-            .Where(e => !string.IsNullOrWhiteSpace(e.TargetDocumentation))
-            .GroupBy(e => e.TargetSignature)
-            .Select(g => g.First())
-            .ToList();
-
-        if (documented.Count == 0)
-            return text;
+        var charBudget = tokenBudget > 0 ? tokenBudget * 4 : int.MaxValue;
+        var text = Chunk.ToRetrievalText(charBudget);
 
         var sb = new System.Text.StringBuilder(text);
-        sb.AppendLine();
-        sb.AppendLine("// --- referenced APIs ---");
-        foreach (var e in documented)
+
+        // --- referenced APIs (outgoing) ---
+        if (OutgoingEdges is { Count: > 0 })
         {
-            if (skipDocSignatures is not null && skipDocSignatures.Contains(e.TargetSignature))
+            var documented = OutgoingEdges
+                .Where(e => !string.IsNullOrWhiteSpace(e.TargetDocumentation))
+                .GroupBy(e => e.TargetSignature)
+                .Select(g => g.First())
+                .ToList();
+
+            if (documented.Count > 0 && sb.Length < charBudget)
             {
-                // Doc body lives in the shared docs section; just name the call here.
-                sb.AppendLine($"// {e.TargetSignature}  (see referenced docs)");
-                continue;
+                sb.AppendLine();
+                sb.AppendLine("// --- referenced APIs ---");
+                foreach (var e in documented)
+                {
+                    if (sb.Length >= charBudget) break;
+                    if (skipDocSignatures is not null && skipDocSignatures.Contains(e.TargetSignature))
+                    {
+                        sb.AppendLine($"// {e.TargetSignature}  (see referenced docs)");
+                        continue;
+                    }
+                    sb.AppendLine($"// {e.TargetSignature}");
+                    foreach (var line in e.TargetDocumentation!.Split('\n'))
+                    {
+                        if (sb.Length >= charBudget) break;
+                        sb.AppendLine($"//   {line.TrimEnd()}");
+                    }
+                }
             }
-            sb.AppendLine($"// {e.TargetSignature}");
-            foreach (var line in e.TargetDocumentation!.Split('\n'))
-                sb.AppendLine($"//   {line.TrimEnd()}");
         }
+
+        // --- callers (incoming) ---
+        if (IncomingEdges is { Count: > 0 } && sb.Length < charBudget)
+        {
+            sb.AppendLine();
+            sb.AppendLine("// --- callers ---");
+            foreach (var e in IncomingEdges.Take(8))
+            {
+                if (sb.Length >= charBudget) break;
+                var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  ({e.FilePath}:{e.LineNumber})";
+                sb.AppendLine($"// {e.SourceSignature}{loc}");
+            }
+        }
+
+        // --- related chunks (containing type / siblings) ---
+        if (RelatedChunks is { Count: > 0 } && sb.Length < charBudget)
+        {
+            sb.AppendLine();
+            sb.AppendLine("// --- related ---");
+            foreach (var rel in RelatedChunks)
+            {
+                if (sb.Length >= charBudget) break;
+                sb.AppendLine($"// [{rel.Relation}] {rel.Chunk.Signature ?? rel.Chunk.FunctionName}  ({rel.Chunk.FilePath}:{rel.Chunk.LineNumber})");
+                if (!string.IsNullOrEmpty(rel.Chunk.Documentation))
+                {
+                    foreach (var line in rel.Chunk.Documentation.Split('\n').Take(4))
+                    {
+                        if (sb.Length >= charBudget) break;
+                        sb.AppendLine($"//   {line.TrimEnd()}");
+                    }
+                }
+            }
+        }
+
         return sb.ToString();
     }
 
@@ -75,4 +137,12 @@ public class SearchResult
         }
         return docs;
     }
+}
+
+/// <summary>A chunk that was attached during neighborhood expansion.</summary>
+public class RelatedChunk
+{
+    public required CodeChunk Chunk { get; set; }
+    /// <summary>"containing-type" | "sibling" | "implementer" | …</summary>
+    public required string Relation { get; set; }
 }

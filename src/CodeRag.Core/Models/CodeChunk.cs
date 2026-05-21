@@ -146,7 +146,12 @@ public class CodeChunk
     /// Includes all semantic metadata captured at index time so the model sees the
     /// same intent signals (attributes, modifiers, graph relationships) the embedder did.
     /// </summary>
-    public string ToRetrievalText()
+    /// <param name="charBudget">
+    /// Soft character cap (~4 chars per LLM token). When the chunk's body would exceed
+    /// the remaining budget, <see cref="BodySummary"/> is used instead, or the body is
+    /// line-truncated. Pass <see cref="int.MaxValue"/> for no cap.
+    /// </param>
+    public string ToRetrievalText(int charBudget = int.MaxValue)
     {
         var parts = new List<string>
         {
@@ -182,8 +187,39 @@ public class CodeChunk
         if (!string.IsNullOrEmpty(Documentation))
             parts.Add(Documentation);
 
+        // Cheap running tally; metadata above is small.
+        var headerCost = parts.Sum(p => p.Length + 1);
+        var bodyRoom = charBudget - headerCost - 200 /* slack for trailing sections */;
+
         if (!string.IsNullOrEmpty(Body))
-            parts.Add(Body);
+        {
+            if (bodyRoom >= Body.Length || charBudget == int.MaxValue)
+            {
+                parts.Add(Body);
+            }
+            else if (!string.IsNullOrEmpty(BodySummary) && BodySummary.Length <= Math.Max(bodyRoom, 100))
+            {
+                parts.Add(BodySummary);
+                parts.Add("// (body truncated — summary above)");
+            }
+            else if (bodyRoom > 200)
+            {
+                // Line-truncate to fit.
+                var lines = Body.Split('\n');
+                var sb = new System.Text.StringBuilder();
+                foreach (var line in lines)
+                {
+                    if (sb.Length + line.Length + 1 > bodyRoom) break;
+                    sb.AppendLine(line);
+                }
+                sb.Append("// ... truncated");
+                parts.Add(sb.ToString());
+            }
+            else if (!string.IsNullOrEmpty(BodySummary))
+            {
+                parts.Add(BodySummary);
+            }
+        }
 
         if (Calls.Count > 0)
         {
