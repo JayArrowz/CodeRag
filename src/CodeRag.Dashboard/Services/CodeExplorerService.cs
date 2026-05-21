@@ -1,5 +1,4 @@
-using CodeRag.Storage.Postgres;
-using CodeRag.Storage.Postgres.Entities;
+using CodeRag.Storage.Shared;
 using Microsoft.EntityFrameworkCore;
 
 namespace CodeRag.Dashboard.Services;
@@ -8,10 +7,10 @@ namespace CodeRag.Dashboard.Services;
 /// Query service for the interactive code explorer — lazy-loads the
 /// project → namespace → class → member hierarchy and edges.
 /// </summary>
-public class CodeExplorerService(IDbContextFactory<CodeRagDbContext> dbFactory)
+public class CodeExplorerService(IDbContextFactory<CodeRagDbContextBase> dbFactory)
 {
     internal const string NoProject = "(no project)";
-    internal const string GlobalNs  = "(global namespace)";
+    internal const string GlobalNs = "(global namespace)";
 
     public async Task<List<string>> GetProjectsAsync(string workspace)
     {

@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CodeRag.Storage.Postgres.Entities;
+namespace CodeRag.Storage.Shared;
 
 [Table("code_edges")]
 public class CodeEdgeEntity

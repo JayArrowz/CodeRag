@@ -1,20 +1,13 @@
-using CodeRag.Storage.Postgres.Entities;
+using CodeRag.Storage.Shared;
 using Microsoft.EntityFrameworkCore;
 
 namespace CodeRag.Storage.Postgres;
 
-public class CodeRagDbContext : DbContext
+public class PgDbContext : CodeRagDbContextBase
 {
-    /// <summary>
-    /// Embedding vector dimensions used when configuring the pgvector column type.
-    /// Set by <see cref="ServiceCollectionExtensions.AddPgVectorStore"/> at startup.
-    /// </summary>
     internal static int EmbeddingDimensions = 1536;
 
-    public DbSet<CodeChunkEntity> CodeChunks => Set<CodeChunkEntity>();
-    public DbSet<CodeEdgeEntity> CodeEdges => Set<CodeEdgeEntity>();
-
-    public CodeRagDbContext(DbContextOptions<CodeRagDbContext> options) : base(options) { }
+    public PgDbContext(DbContextOptions<PgDbContext> options) : base(options) { }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -4,8 +4,8 @@ using CodeRag.Core.Services;
 using CodeRag.Dashboard.Api;
 using CodeRag.Dashboard.Components;
 using CodeRag.Dashboard.Services;
+using CodeRag.Storage;
 using CodeRag.Storage.Embeddings;
-using CodeRag.Storage.Postgres;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,7 +15,7 @@ builder.Configuration.AddEnvironmentVariables("CODERAG_");
 var config = builder.Configuration;
 
 // CodeRag pipeline
-builder.Services.AddPgVectorStore(config);
+builder.Services.AddVectorStore(config);
 builder.Services.AddEmbeddingService(config);
 
 builder.Services.AddSingleton<ILanguageAnalyzer, RoslynAnalyzer>();

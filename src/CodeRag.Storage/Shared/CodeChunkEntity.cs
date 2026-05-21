@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Pgvector;
 
-namespace CodeRag.Storage.Postgres.Entities;
+namespace CodeRag.Storage.Shared;
 
 [Table("code_chunks")]
 public class CodeChunkEntity
