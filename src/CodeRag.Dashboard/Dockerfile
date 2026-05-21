@@ -14,7 +14,6 @@ COPY CodeRag.sln ./
 COPY src/CodeRag.Core/CodeRag.Core.csproj                   src/CodeRag.Core/
 COPY src/CodeRag.Analyzers/CodeRag.Analyzers.csproj         src/CodeRag.Analyzers/
 COPY src/CodeRag.Storage/CodeRag.Storage.csproj             src/CodeRag.Storage/
-COPY src/CodeRag.Cli/CodeRag.Cli.csproj                     src/CodeRag.Cli/
 COPY src/CodeRag.Dashboard/CodeRag.Dashboard.csproj         src/CodeRag.Dashboard/
 RUN dotnet restore src/CodeRag.Dashboard/CodeRag.Dashboard.csproj
 
