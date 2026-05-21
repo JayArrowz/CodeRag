@@ -1,15 +1,26 @@
 ﻿# CodeRag
 
-A hybrid **vector + call-graph** code index for RAG. It extracts classes, methods, properties, library calls, and call-graph edges from C# source code, embeds them, and stores everything in PostgreSQL/pgvector for semantic and structural search. A Blazor Server dashboard provides live indexing, interactive exploration, and semantic search.
+A hybrid **vector + call-graph** code index for RAG. It extracts classes, methods, properties, library calls, and call-graph edges from C# and TypeScript/TSX source code, embeds them, and stores everything in PostgreSQL/pgvector for semantic and structural search. A Blazor Server dashboard provides live indexing, interactive exploration, and semantic search.
 
 ## Architecture
 
 ```
 CodeRag.Core          Models, interfaces (IVectorStore, ILanguageAnalyzer, IEmbeddingService, ISolutionAnalyzer)
-CodeRag.Analyzers     Roslyn (C#, full semantic) + Tree-sitter stubs (Python, TypeScript, Go)
-CodeRag.Storage       EF Core + PostgreSQL/pgvector, OpenAI embeddings
+CodeRag.Analyzers     Roslyn (C#, full semantic) + TsCompilerAnalyzer (TS/TSX, full type-checker)
+                      + Tree-sitter stubs (JavaScript/JSX, Python, Go)
+CodeRag.Storage       EF Core + PostgreSQL/pgvector, OpenAI / Google embeddings
 CodeRag.Dashboard     Blazor Server dashboard -- indexing, search, explorer, watches
+tools/ts-analyzer     Node.js sidecar (ts-morph) spawned by TsCompilerAnalyzer
 ```
+
+## Supported Languages
+
+| Language | Analyzer | Semantic edges | Notes |
+|----------|----------|----------------|-------|
+| C# | Roslyn (`MSBuildWorkspace`) | Full — calls, creates, inherits, implements | Requires a `.sln` / `.csproj` descriptor |
+| TypeScript / TSX | `TsCompilerAnalyzer` + Node.js sidecar | Full — calls, creates, inherits, implements, renders, passes | Requires Node.js 18+; `tsconfig.json` auto-discovered |
+| JavaScript / JSX | `JavaScriptAnalyzer` (tree-sitter) | Structural only | No type resolution |
+| Python, Go | Tree-sitter stubs | Structural only | Extend `TreeSitterAnalyzerBase` |
 
 ## Concepts
 
@@ -27,14 +38,16 @@ A workspace is **distinct from a `ProjectName`** (the `.csproj` name inside a so
 
 In addition to vector chunks, the indexer extracts directed edges:
 
-| Edge kind    | Meaning                                 |
-|--------------|-----------------------------------------|
-| `calls`      | method A invokes method B               |
-| `creates`    | method A constructs type B              |
-| `inherits`   | type A inherits from base type B        |
-| `implements` | type A implements interface B           |
+| Edge kind    | Languages         | Meaning                                        |
+|--------------|-------------------|------------------------------------------------|
+| `calls`      | C#, TS/TSX        | method / function A invokes B                  |
+| `creates`    | C#, TS/TSX        | method A constructs type B (`new`)             |
+| `inherits`   | C#, TS/TSX        | type A inherits from base type B               |
+| `implements` | C#, TS/TSX        | type A implements interface B                  |
+| `renders`    | TSX               | component A renders component B in JSX         |
+| `passes`     | TSX               | component A passes a symbol as a prop to B     |
 
-Edges are resolved against canonical Roslyn signatures within the workspace. Unresolved edges (target indexed in a different run) are lazily resolved at query time and persisted so subsequent lookups are instant.
+Edges are resolved against canonical signatures within the workspace. Unresolved edges (target indexed in a different run) are lazily resolved at query time and persisted so subsequent lookups are instant.
 
 ### Query pipeline
 
@@ -50,15 +63,17 @@ Every stage is individually toggleable via `QueryOptions`.
 
 ## What Gets Indexed
 
-| Element         | Fields Stored                                                                   |
-|-----------------|---------------------------------------------------------------------------------|
-| Classes/Structs | Name, namespace, modifiers, attributes, XML doc, file, line, base/interface ref |
-| Methods         | Signature, parameters, return type, body, XML doc, modifiers, callers/callees   |
-| Constructors    | Parameters, body, XML doc                                                       |
-| Properties      | Name, type, modifiers, XML doc                                                  |
-| Enums           | Name, members, XML doc                                                          |
-| Library calls   | Assembly, namespace, signature, call location                                   |
-| Edges           | Source chunk -> target signature/chunk, kind (calls/creates/inherits/implements) |
+| Element                      | Languages  | Fields Stored                                                                    |
+|------------------------------|------------|-----------------------------------------------------------------------------------|
+| Classes / interfaces         | C#, TS/TSX | Name, namespace, modifiers, attributes, doc, file, line, base/interface refs      |
+| Methods / functions          | C#, TS/TSX | Signature, parameters, return type, body, doc, modifiers, callers/callees          |
+| Constructors                 | C#, TS/TSX | Parameters, body, doc                                                             |
+| Properties / fields          | C#, TS/TSX | Name, type, modifiers, doc                                                        |
+| Arrow functions / `const fn` | TS/TSX     | Inlined as `function_declaration` chunks with full signature                      |
+| Type aliases                 | TS/TSX     | Name, namespace, body                                                             |
+| Enums                        | C#         | Name, members, XML doc                                                            |
+| Library calls                | C#         | Assembly, namespace, signature, call location                                     |
+| Edges                        | C#, TS/TSX | Source → target signature/chunk, kind (calls/creates/inherits/implements/renders/passes) |
 
 ## Quick Start
 
@@ -195,13 +210,43 @@ All settings live under two JSON sections in `appsettings.json`. Every key can b
 
 Key methods: `InitializeAsync`, `UpsertAsync` (chunks), `UpsertEdgesAsync`, `SearchAsync`, `ExactSymbolSearchAsync`, `LexicalSearchAsync`, `GetCallersAsync` / `GetCalleesAsync` / `GetOutgoingEdgesAsync`, `DeleteByFileAsync` / `DeleteByProjectAsync` / `DeleteByWorkspaceAsync`, `ListWorkspacesAsync`, `GetStatsAsync`.
 
+## TypeScript / TSX Support
+
+TypeScript and TSX files are analyzed by a long-lived **Node.js sidecar** process (`tools/ts-analyzer/analyze.js`) that uses [ts-morph](https://ts-morph.com/) to run the full TypeScript type-checker. The .NET `TsCompilerAnalyzer` communicates with it over NDJSON on stdin/stdout.
+
+### Prerequisites
+
+- **Node.js 18+** must be on `PATH` (or available as `node` / `cmd /c node`).
+- `npm install` must have been run in `tools/ts-analyzer/` (done automatically on first use, or pre-baked into the Docker image).
+
+### How it works
+
+1. On first use for a workspace, `TsCompilerAnalyzer` spawns `node analyze.js --server` as a background sidecar.
+2. An `open` request loads the nearest `tsconfig.json` (auto-discovered from the project directory upward).
+3. For a **full index**, an `analyze` request streams all chunks and edges back to .NET.
+4. For an **incremental watch update**, a `reanalyze` request passes only the changed file paths; the sidecar refreshes those files from disk and re-emits only the affected chunks/edges while still resolving cross-file type edges against the full project.
+5. On workspace deletion, the sidecar session is evicted and the process exits cleanly.
+
+### Running locally without Docker
+
+```bash
+cd tools/ts-analyzer
+npm install
+```
+
+Then index a TypeScript workspace from the dashboard. The sidecar is started automatically.
+
+### Docker
+
+The `Dockerfile` has a dedicated `node-deps` build stage that runs `npm ci --omit=dev`. The runtime image installs Node.js 20 via NodeSource and copies the pre-built `tools/ts-analyzer/node_modules` — no `npm install` is needed at container startup.
+
 ## Adding Languages
 
 1. Implement `ILanguageAnalyzer` (or extend `TreeSitterAnalyzerBase`).
 2. Register it: `services.AddSingleton<ILanguageAnalyzer, YourAnalyzer>()`.
 3. The indexer auto-routes files by extension.
 
-Tree-sitter stubs for Python, TypeScript, and Go are in place -- add the NuGet packages and implement the parsing logic.
+Tree-sitter stubs for JavaScript/JSX, Python, and Go are in place — add the NuGet packages and implement the parsing logic.
 
 ## Database Schema
 
