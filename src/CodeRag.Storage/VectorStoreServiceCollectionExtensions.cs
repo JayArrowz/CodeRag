@@ -15,19 +15,22 @@ public static class VectorStoreServiceCollectionExtensions
     {
         var options = config.GetSection("Database").Get<DatabaseOptions>()
             ?? throw new InvalidOperationException("Missing 'Database' configuration section.");
+        var embeddingOptions = config.GetSection("Embedding").Get<EmbeddingOptions>() ?? 
+            throw new InvalidOperationException("Missing 'Embedded' options");
 
         return options.Provider switch
         {
-            DatabaseProviderType.Postgres => services.AddPostgresVectorStore(options),
+            DatabaseProviderType.Postgres => services.AddPostgresVectorStore(options, embeddingOptions),
             DatabaseProviderType.Sqlite   => services.AddSqliteVectorStore(options),
             _ => throw new NotSupportedException($"Database provider '{options.Provider}' is not supported."),
         };
     }
 
     private static IServiceCollection AddPostgresVectorStore(this IServiceCollection services,
-        DatabaseOptions options)
+        DatabaseOptions options,
+        EmbeddingOptions embeddingOptions)
     {
-        var embeddingDimensions = options.EmbeddingDimensions;
+        var embeddingDimensions = embeddingOptions.Dimensions;
         Postgres.PgDbContext.EmbeddingDimensions = embeddingDimensions;
 
         services.AddDbContextFactory<Postgres.PgDbContext>(o =>

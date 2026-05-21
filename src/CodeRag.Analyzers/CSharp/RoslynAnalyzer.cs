@@ -54,7 +54,8 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         };
 
         IEnumerable<Project> projects;
-        if (solutionOrProjectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+        if (solutionOrProjectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+            || solutionOrProjectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
         {
             var solution = await msbuildWorkspace.OpenSolutionAsync(solutionOrProjectPath);
             projects = solution.Projects;

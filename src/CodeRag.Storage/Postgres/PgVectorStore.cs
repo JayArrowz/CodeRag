@@ -49,32 +49,28 @@ internal class PgVectorStore : VectorStoreBase<PgDbContext>
             Console.Error.WriteLine($"Could not enforce embedding column dimension: {ex.Message}");
         }
 
-        var indexSql = """
-            CREATE INDEX IF NOT EXISTS ix_chunks_embedding
-            ON code_chunks
-            USING ivfflat (embedding vector_cosine_ops)
-            WITH (lists = 100);
-            """;
-        try
+        // pgvector ivfflat and hnsw both cap at 2000 dimensions for the `vector` type.
+        // Higher-dimensional models (e.g. Gemini at 3072) must rely on sequential scans.
+        if (_embeddingDimensions > 2000)
         {
-            await db.Database.ExecuteSqlRawAsync(indexSql, ct);
+            Console.Error.WriteLine(
+                $"Skipping vector index: pgvector ivfflat/hnsw require ≤ 2000 dimensions " +
+                $"(configured: {_embeddingDimensions}). Searches will use sequential scans.");
         }
-        catch (Exception ex)
+        else
         {
-            Console.Error.WriteLine($"IVFFlat index creation deferred or failed: {ex.Message}");
-
-            var hnswSql = """
-                CREATE INDEX IF NOT EXISTS ix_chunks_embedding_hnsw
+            var indexSql = """
+                CREATE INDEX IF NOT EXISTS ix_chunks_embedding
                 ON code_chunks
                 USING hnsw (embedding vector_cosine_ops);
                 """;
             try
             {
-                await db.Database.ExecuteSqlRawAsync(hnswSql, ct);
+                await db.Database.ExecuteSqlRawAsync(indexSql, ct);
             }
-            catch
+            catch (Exception ex)
             {
-                Console.Error.WriteLine("Vector index will be created after first data insert.");
+                Console.Error.WriteLine($"Vector index creation failed: {ex.Message}");
             }
         }
     }

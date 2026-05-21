@@ -29,11 +29,4 @@ public class DatabaseOptions
 {
     public DatabaseProviderType Provider { get; set; } = DatabaseProviderType.Postgres;
     public string ConnectionString { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Required for Postgres: fixes the vector column dimension so ivfflat/hnsw
-    /// indexes can be built. Must match the embedding model's output dimension.
-    /// Ignored for SQLite.
-    /// </summary>
-    public int EmbeddingDimensions { get; set; } = 1536;
 }
