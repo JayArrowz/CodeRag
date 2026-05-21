@@ -200,4 +200,97 @@ public class CodebaseIndexer
         var normalized = path.Replace('\\', '/');
         return _options.ExcludePatterns.Any(p => normalized.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// Reindex a set of files in-place: deletes any existing chunks/edges keyed by each
+    /// file's path (scoped to <paramref name="workspace"/>), reanalyzes the file, then
+    /// upserts fresh chunks/edges. Used by the file watcher to incrementally update the
+    /// index when source files change on disk. <paramref name="absoluteFiles"/> may contain
+    /// paths whose extension isn't supported — those are silently skipped.
+    /// </summary>
+    public async Task<IndexingStats> IndexFilesAsync(string rootPath, IEnumerable<string> absoluteFiles,
+        string workspace, string? projectName = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(workspace))
+            throw new ArgumentException("Workspace is required.", nameof(workspace));
+
+        var stats = new IndexingStats { Workspace = workspace };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        projectName ??= Path.GetFileName(rootPath);
+
+        var analyzerMap = BuildAnalyzerMap();
+        var files = absoluteFiles
+            .Where(File.Exists)
+            .Where(f => analyzerMap.ContainsKey(Path.GetExtension(f)))
+            .Where(f => !IsExcluded(f))
+            .Distinct()
+            .ToList();
+
+        stats.TotalFiles = files.Count;
+        if (files.Count == 0)
+        {
+            sw.Stop();
+            stats.Duration = sw.Elapsed;
+            return stats;
+        }
+
+        var allChunks = new List<CodeChunk>();
+        var allEdges = new List<CodeEdge>();
+
+        foreach (var file in files)
+        {
+            var ext = Path.GetExtension(file);
+            var analyzer = analyzerMap[ext];
+            string content;
+            try { content = await File.ReadAllTextAsync(file, ct); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error reading {file}: {ex.Message}");
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(rootPath, file);
+            // Wipe old chunks/edges for this file before reinserting.
+            await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
+
+            try
+            {
+                var result = await analyzer.AnalyzeFileAsync(relativePath, content, workspace, projectName);
+                allChunks.AddRange(result.Chunks);
+                allEdges.AddRange(result.Edges);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error analyzing {file}: {ex.Message}");
+            }
+        }
+
+        StampWorkspace(allChunks, allEdges, workspace);
+        ResolveEdgeTargets(allChunks, allEdges);
+        await EmbedAndStore(allChunks, allEdges, stats, ct);
+
+        sw.Stop();
+        stats.Duration = sw.Elapsed;
+        return stats;
+    }
+
+    /// <summary>Remove all chunks/edges for the given relative file path in a workspace.</summary>
+    public Task RemoveFileAsync(string relativeFilePath, string workspace, CancellationToken ct = default) =>
+        _vectorStore.DeleteByFileAsync(relativeFilePath, workspace, ct);
+
+    /// <summary>Set of file extensions (incl. leading dot) all registered analyzers can process.</summary>
+    public IReadOnlySet<string> SupportedExtensions =>
+        _analyzers.SelectMany(a => a.SupportedExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True when a path matches one of the configured exclude patterns (bin, obj, .git, ...).</summary>
+    public bool IsPathExcluded(string path) => IsExcluded(path);
+
+    private Dictionary<string, ILanguageAnalyzer> BuildAnalyzerMap()
+    {
+        var map = new Dictionary<string, ILanguageAnalyzer>(StringComparer.OrdinalIgnoreCase);
+        foreach (var analyzer in _analyzers)
+            foreach (var ext in analyzer.SupportedExtensions)
+                map.TryAdd(ext, analyzer);
+        return map;
+    }
 }

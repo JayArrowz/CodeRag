@@ -33,6 +33,9 @@ else
 builder.Services.AddSingleton<ILanguageAnalyzer, RoslynAnalyzer>();
 builder.Services.AddSingleton<CodebaseIndexer>();
 builder.Services.AddSingleton<IndexingJobService>();
+builder.Services.AddSingleton<WatchPersistence>();
+builder.Services.AddSingleton<FileWatcherService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FileWatcherService>());
 builder.Services.AddScoped<CodeExplorerService>();
 
 // Blazor

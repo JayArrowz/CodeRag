@@ -220,11 +220,40 @@ public class PgVectorStore : IVectorStore
         await db.CodeChunks.Where(c => c.ProjectName == projectName).ExecuteDeleteAsync(ct);
     }
 
-    public async Task DeleteByFileAsync(string filePath, CancellationToken ct = default)
+    public async Task DeleteByFileAsync(string filePath, string? workspace = null, CancellationToken ct = default)
     {
         await using var db = await _contextFactory.CreateDbContextAsync(ct);
-        await db.CodeEdges.Where(e => e.FilePath == filePath).ExecuteDeleteAsync(ct);
-        await db.CodeChunks.Where(c => c.FilePath == filePath).ExecuteDeleteAsync(ct);
+        if (workspace is null)
+        {
+            await db.CodeEdges.Where(e => e.FilePath == filePath).ExecuteDeleteAsync(ct);
+            await db.CodeChunks.Where(c => c.FilePath == filePath).ExecuteDeleteAsync(ct);
+        }
+        else
+        {
+            await db.CodeEdges.Where(e => e.FilePath == filePath && e.Workspace == workspace).ExecuteDeleteAsync(ct);
+            await db.CodeChunks.Where(c => c.FilePath == filePath && c.Workspace == workspace).ExecuteDeleteAsync(ct);
+        }
+    }
+
+    public async Task<List<FileIndexInfo>> ListIndexedFilesAsync(string workspace, string? projectName = null, CancellationToken ct = default)
+    {
+        await using var db = await _contextFactory.CreateDbContextAsync(ct);
+        var query = db.CodeChunks.Where(c => c.Workspace == workspace);
+        if (!string.IsNullOrEmpty(projectName))
+            query = query.Where(c => c.ProjectName == projectName);
+
+        var rows = await query
+            .GroupBy(c => new { c.FilePath, c.Workspace, c.ProjectName })
+            .Select(g => new FileIndexInfo
+            {
+                FilePath = g.Key.FilePath,
+                Workspace = g.Key.Workspace,
+                ProjectName = g.Key.ProjectName,
+                LastIndexedAt = g.Max(c => c.IndexedAt),
+                ChunkCount = g.Count(),
+            })
+            .ToListAsync(ct);
+        return rows;
     }
 
     public async Task<List<WorkspaceInfo>> ListWorkspacesAsync(CancellationToken ct = default)

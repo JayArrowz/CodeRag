@@ -125,7 +125,7 @@ public static class CodeRagApi
 
         api.MapDelete("/files", async (string path, IVectorStore store, CancellationToken ct) =>
         {
-            await store.DeleteByFileAsync(path, ct);
+            await store.DeleteByFileAsync(path, null, ct);
             return Results.Ok(new { ok = true, deleted = path });
         })
         .WithSummary("Drop all chunks and edges for a file path.");
@@ -162,12 +162,62 @@ public static class CodeRagApi
         })
         .WithSummary("Remove a finished job from the registry.");
 
+        // ----- file watches -----
+        api.MapGet("/watches", (FileWatcherService watcher) =>
+            Results.Ok(watcher.List()))
+            .WithSummary("List configured directory watches (auto-reindex roots).");
+
+        api.MapGet("/watches/events", (FileWatcherService watcher) =>
+            Results.Ok(watcher.RecentEvents()))
+            .WithSummary("Recent watcher events (reindex / remove / sweep / error).");
+
+        api.MapPost("/watches", (AddWatchRequest req, FileWatcherService watcher) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Path) || string.IsNullOrWhiteSpace(req.Workspace))
+                return Results.BadRequest(new { error = "path and workspace are required" });
+            if (!Directory.Exists(req.Path))
+                return Results.BadRequest(new { error = $"directory not found: {req.Path}" });
+
+            var added = watcher.AddWatch(new WatchedRoot
+            {
+                Path = Path.GetFullPath(req.Path),
+                Workspace = req.Workspace,
+                Project = string.IsNullOrWhiteSpace(req.Project) ? null : req.Project,
+                IncludeSubdirectories = req.IncludeSubdirectories ?? true,
+                Enabled = req.Enabled ?? true,
+            });
+            return Results.Created($"/api/watches/{added.Id}", added);
+        })
+        .WithSummary("Register a directory to be auto-synced to the index.");
+
+        api.MapPatch("/watches/{id:guid}", (Guid id, UpdateWatchRequest req, FileWatcherService watcher) =>
+        {
+            if (req.Enabled is bool enabled)
+                return watcher.SetEnabled(id, enabled) ? Results.Ok(watcher.Get(id)) : Results.NotFound();
+            return Results.BadRequest(new { error = "no supported fields to update" });
+        })
+        .WithSummary("Enable or disable a watch.");
+
+        api.MapPost("/watches/{id:guid}/sweep", async (Guid id, FileWatcherService watcher, CancellationToken ct) =>
+        {
+            if (watcher.Get(id) is null) return Results.NotFound();
+            await watcher.SweepNowAsync(id, ct);
+            return Results.Ok(new { ok = true });
+        })
+        .WithSummary("Force a catch-up sweep for this watch right now.");
+
+        api.MapDelete("/watches/{id:guid}", (Guid id, FileWatcherService watcher) =>
+            watcher.RemoveWatch(id) ? Results.Ok(new { ok = true }) : Results.NotFound())
+            .WithSummary("Stop watching this root (does not delete indexed data).");
+
         return app;
     }
 
     // ----- request / response DTOs -----
     public record IndexSolutionRequest(string Path, string Workspace);
     public record IndexDirectoryRequest(string Path, string Workspace, string? Project);
+    public record AddWatchRequest(string Path, string Workspace, string? Project = null, bool? IncludeSubdirectories = null, bool? Enabled = null);
+    public record UpdateWatchRequest(bool? Enabled);
 
     public record QueryRequest(
         string Query,

@@ -1,0 +1,157 @@
+@page "/watches"
+@using CodeRag.Dashboard.Services
+@inject FileWatcherService Watcher
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Watches</PageTitle>
+
+<h1>Directory watches</h1>
+
+<p class="muted">
+    Registered directories are watched live and reindexed when files change. On dashboard
+    startup each enabled watch runs a <em>catch-up sweep</em>: files modified while the app
+    was offline are reindexed and files no longer on disk have their chunks removed.
+    Watches persist across restarts.
+</p>
+
+<div class="card">
+    <h3>Add a watch</h3>
+    <div class="form-row">
+        <label>Directory
+            <input type="text" @bind="_path" placeholder="D:\path\to\src" style="min-width:380px" />
+        </label>
+        <label>Workspace
+            <input type="text" @bind="_ws" placeholder="MyApp" />
+        </label>
+        <label>Project (optional)
+            <input type="text" @bind="_proj" placeholder="MyApp.Web" />
+        </label>
+        <label><input type="checkbox" @bind="_recursive" /> recurse</label>
+        <button @onclick="Add" disabled="@(!CanAdd)">Add &amp; sweep</button>
+    </div>
+    @if (_error is not null) { <div style="color:var(--bad);margin-top:8px">@_error</div> }
+</div>
+
+<div class="card">
+    <h3>Active watches</h3>
+    @if (_watches.Count == 0)
+    {
+        <p class="muted">No watches registered.</p>
+    }
+    else
+    {
+        <table class="table">
+            <thead>
+                <tr><th>Path</th><th>Workspace</th><th>Project</th><th>Recursive</th><th>Enabled</th><th>Last sweep</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var w in _watches)
+            {
+                <tr>
+                    <td><code>@w.Path</code></td>
+                    <td>@w.Workspace</td>
+                    <td>@(w.Project ?? "—")</td>
+                    <td>@(w.IncludeSubdirectories ? "yes" : "no")</td>
+                    <td>
+                        <button @onclick="() => Toggle(w.Id, !w.Enabled)">
+                            @(w.Enabled ? "disable" : "enable")
+                        </button>
+                    </td>
+                    <td>@(w.LastSweepAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</td>
+                    <td>
+                        <button @onclick="() => Sweep(w.Id)">sweep now</button>
+                        <button @onclick="() => Remove(w.Id)" style="color:var(--bad)">remove</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</div>
+
+<div class="card">
+    <h3>Recent events</h3>
+    @if (_events.Count == 0)
+    {
+        <p class="muted">No events yet.</p>
+    }
+    else
+    {
+        <table class="table">
+            <thead><tr><th>When</th><th>Kind</th><th>Workspace</th><th>Path</th><th>Detail</th></tr></thead>
+            <tbody>
+            @foreach (var ev in _events.OrderByDescending(e => e.At).Take(100))
+            {
+                <tr>
+                    <td>@ev.At.ToLocalTime().ToString("HH:mm:ss")</td>
+                    <td><span class="badge badge-@KindClass(ev.Kind)">@ev.Kind</span></td>
+                    <td>@ev.Workspace</td>
+                    <td><code>@ev.FilePath</code></td>
+                    <td>@ev.Detail</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    string _path = "";
+    string _ws = "";
+    string _proj = "";
+    bool _recursive = true;
+    string? _error;
+
+    List<WatchedRoot> _watches = new();
+    List<WatchEvent> _events = new();
+
+    bool CanAdd => !string.IsNullOrWhiteSpace(_path) && !string.IsNullOrWhiteSpace(_ws);
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Watcher.Changed += OnWatcherChanged;
+    }
+
+    void OnWatcherChanged() => InvokeAsync(() => { Refresh(); StateHasChanged(); });
+
+    void Refresh()
+    {
+        _watches = Watcher.List().ToList();
+        _events = Watcher.RecentEvents().ToList();
+    }
+
+    void Add()
+    {
+        _error = null;
+        try
+        {
+            if (!Directory.Exists(_path)) { _error = $"Directory not found: {_path}"; return; }
+            Watcher.AddWatch(new WatchedRoot
+            {
+                Path = Path.GetFullPath(_path),
+                Workspace = _ws.Trim(),
+                Project = string.IsNullOrWhiteSpace(_proj) ? null : _proj.Trim(),
+                IncludeSubdirectories = _recursive,
+            });
+            _path = ""; _proj = "";
+            Refresh();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    void Toggle(Guid id, bool enabled) { Watcher.SetEnabled(id, enabled); Refresh(); }
+    void Remove(Guid id) { Watcher.RemoveWatch(id); Refresh(); }
+    void Sweep(Guid id) { _ = Watcher.SweepNowAsync(id); }
+
+    static string KindClass(WatchEventKind k) => k switch
+    {
+        WatchEventKind.Error => "bad",
+        WatchEventKind.RemoveFile => "warn",
+        WatchEventKind.SweepStarted or WatchEventKind.SweepCompleted => "info",
+        _ => "ok",
+    };
+
+    public void Dispose() => Watcher.Changed -= OnWatcherChanged;
+}

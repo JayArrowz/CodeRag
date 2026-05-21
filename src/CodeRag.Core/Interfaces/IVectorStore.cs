@@ -46,10 +46,18 @@ public interface IVectorStore : IAsyncDisposable
 
     /// <summary>
     /// Delete all chunks associated with a given project or file path.
-    /// Useful for re-indexing.
+    /// Useful for re-indexing. When <paramref name="workspace"/> is provided
+    /// the delete is scoped so identical relative paths in other workspaces are untouched.
     /// </summary>
     Task DeleteByProjectAsync(string projectName, CancellationToken ct = default);
-    Task DeleteByFileAsync(string filePath, CancellationToken ct = default);
+    Task DeleteByFileAsync(string filePath, string? workspace = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Return one entry per distinct file path within a workspace with the most recent
+    /// indexing timestamp. Used by the file watcher to detect changes that happened
+    /// while the app was offline.
+    /// </summary>
+    Task<List<FileIndexInfo>> ListIndexedFilesAsync(string workspace, string? projectName = null, CancellationToken ct = default);
 
     /// <summary>
     /// List all distinct workspaces with summary counts.
