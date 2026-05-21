@@ -111,11 +111,25 @@ public class CodebaseIndexer
         return stats;
     }
 
+    /// <summary>
+    /// Run a semantic query. By default, each result is hydrated with its outgoing
+    /// edges so <see cref="SearchResult.ToRetrievalText"/> includes inline documentation
+    /// for external library calls — ideal for feeding to an LLM.
+    /// Set <paramref name="hydrateEdges"/> to <c>false</c> for a cheaper, chunk-only search.
+    /// </summary>
     public async Task<List<SearchResult>> QueryAsync(string query, int topK = 10,
-        SearchFilter? filter = null, CancellationToken ct = default)
+        SearchFilter? filter = null, bool hydrateEdges = true, CancellationToken ct = default)
     {
         var embedding = await _embeddingService.EmbedAsync(query, ct);
-        return await _vectorStore.SearchAsync(embedding, topK, filter, ct);
+        var results = await _vectorStore.SearchAsync(embedding, topK, filter, ct);
+
+        if (hydrateEdges)
+        {
+            foreach (var r in results)
+                r.OutgoingEdges = await _vectorStore.GetOutgoingEdgesAsync(r.Chunk.Id, ct);
+        }
+
+        return results;
     }
 
     private async Task EmbedAndStore(List<CodeChunk> chunks, List<CodeEdge> edges,

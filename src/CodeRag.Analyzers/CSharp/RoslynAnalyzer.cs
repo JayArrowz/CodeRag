@@ -158,7 +158,8 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         Language = LanguageName,
                         Namespace = nsName,
                         ClassName = className,
-                        FunctionName = ".ctor",
+                        // Use the class name so ctors are discoverable by name searches.
+                        FunctionName = className,
                         Signature = ctorSymbol?.ToDisplayString() ?? $"{className}()",
                         FilePath = filePath,
                         LineNumber = ctor.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
@@ -166,7 +167,9 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         Documentation = GetXmlDoc(ctor),
                         Body = ctor.Body?.ToFullString() ?? ctor.ExpressionBody?.ToFullString(),
                         ProjectName = projectName,
-                        Parameters = ctorSymbol?.Parameters.Select(p => $"{p.Type} {p.Name}").ToList() ?? [],
+                        Modifiers = ctor.Modifiers.Select(m => m.Text).ToList(),
+                        Parameters = ctorSymbol?.Parameters.Select(FormatParameter).ToList() ?? [],
+                        Attributes = GetAttributes(ctor),
                     };
                     result.Chunks.Add(ctorChunk);
                     ExtractBodyEdges(ctor, ctorChunk, semanticModel, filePath, projectName,
@@ -191,10 +194,44 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         ReturnType = propSymbol?.Type.ToDisplayString(),
                         ProjectName = projectName,
                         Modifiers = prop.Modifiers.Select(m => m.Text).ToList(),
+                        Attributes = GetAttributes(prop),
                     };
                     result.Chunks.Add(propChunk);
                     ExtractBodyEdges(prop, propChunk, semanticModel, filePath, projectName,
                         solutionProjects, result);
+                }
+
+                foreach (var field in typeDecl.Members.OfType<FieldDeclarationSyntax>())
+                {
+                    var fieldAttributes = GetAttributes(field);
+                    var fieldModifiers = field.Modifiers.Select(m => m.Text).ToList();
+                    var fieldDoc = GetXmlDoc(field);
+                    var fieldType = field.Declaration.Type.ToString();
+
+                    foreach (var variable in field.Declaration.Variables)
+                    {
+                        var fieldSymbol = semanticModel?.GetDeclaredSymbol(variable) as IFieldSymbol;
+                        var fieldName = fieldSymbol?.Name ?? variable.Identifier.Text;
+                        var lineSpan = variable.GetLocation().GetLineSpan();
+                        result.Chunks.Add(new CodeChunk
+                        {
+                            Kind = "field_declaration",
+                            Language = LanguageName,
+                            Namespace = nsName,
+                            ClassName = className,
+                            FunctionName = fieldName,
+                            Signature = fieldSymbol?.ToDisplayString() ?? $"{fieldType} {fieldName}",
+                            FilePath = filePath,
+                            LineNumber = lineSpan.StartLinePosition.Line + 1,
+                            EndLineNumber = lineSpan.EndLinePosition.Line + 1,
+                            Documentation = fieldDoc,
+                            Body = variable.Initializer?.ToFullString(),
+                            ReturnType = fieldSymbol?.Type.ToDisplayString() ?? fieldType,
+                            ProjectName = projectName,
+                            Modifiers = fieldModifiers,
+                            Attributes = fieldAttributes,
+                        });
+                    }
                 }
             }
 
@@ -243,7 +280,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             ReturnType = methodSymbol?.ReturnType.ToDisplayString() ?? method.ReturnType.ToString(),
             ProjectName = projectName,
             Modifiers = method.Modifiers.Select(m => m.Text).ToList(),
-            Parameters = methodSymbol?.Parameters.Select(p => $"{p.Type} {p.Name}").ToList() ?? [],
+            Parameters = methodSymbol?.Parameters.Select(FormatParameter).ToList() ?? [],
             Attributes = GetAttributes(method),
         };
         result.Chunks.Add(chunk);
@@ -306,6 +343,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                 LineNumber = line,
                 ProjectName = projectName,
                 Language = LanguageName,
+                TargetDocumentation = GetSymbolXmlDoc((ISymbol?)ctorSymbol ?? typeSymbol),
             };
             edge.Id = DeterministicGuid($"{owner.Id}|creates|{signature}|{line}");
 
@@ -342,6 +380,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             LineNumber = lineNumber,
             ProjectName = projectName,
             Language = LanguageName,
+            TargetDocumentation = GetSymbolXmlDoc(target),
         };
         edge.Id = DeterministicGuid($"{owner.Id}|{edgeKind}|{signature}|{lineNumber}");
         return edge;
@@ -372,6 +411,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             LineNumber = line,
             ProjectName = projectName,
             Language = LanguageName,
+            TargetDocumentation = GetSymbolXmlDoc(symbol),
         };
         edge.Id = DeterministicGuid($"{owner.Id}|{edgeKind}|{signature}");
         return edge;
@@ -428,6 +468,29 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         Span<byte> hash = stackalloc byte[16];
         MD5.HashData(Encoding.UTF8.GetBytes(seed), hash);
         return new Guid(hash);
+    }
+
+    /// <summary>
+    /// Pulls the XML documentation comment off a symbol (including external/library symbols
+    /// from reference assemblies). Returns null if the symbol has no doc.
+    /// </summary>
+    private static string? GetSymbolXmlDoc(ISymbol? symbol)
+    {
+        if (symbol is null) return null;
+        var xml = symbol.GetDocumentationCommentXml();
+        return string.IsNullOrWhiteSpace(xml) ? null : xml;
+    }
+
+    /// <summary>
+    /// Format a parameter, including any attributes (e.g. [FromBody], [Required]).
+    /// </summary>
+    private static string FormatParameter(IParameterSymbol p)
+    {
+        var attrs = p.GetAttributes();
+        var prefix = attrs.Length == 0
+            ? string.Empty
+            : string.Concat(attrs.Select(a => $"[{a.AttributeClass?.Name ?? a.ToString()}] "));
+        return $"{prefix}{p.Type} {p.Name}";
     }
 
     private static string? GetXmlDoc(MemberDeclarationSyntax member)

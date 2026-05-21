@@ -23,6 +23,13 @@ public class CodeEdge
     public string? TargetMemberName { get; set; }
     public string? TargetAssembly { get; set; }
 
+    /// <summary>
+    /// XML documentation comment from the target symbol, when available.
+    /// Populated for external (library) targets so retrieval can surface their docs
+    /// without storing a full chunk for every library member.
+    /// </summary>
+    public string? TargetDocumentation { get; set; }
+
     /// <summary>calls | creates | inherits | implements | references</summary>
     public string EdgeKind { get; set; } = "calls";
 

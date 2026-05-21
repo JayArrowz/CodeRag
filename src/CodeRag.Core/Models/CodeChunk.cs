@@ -103,6 +103,12 @@ public class CodeChunk
         if (!string.IsNullOrEmpty(ClassName))
             parts.Add($"class {ClassName}");
 
+        if (Modifiers.Count > 0)
+            parts.Add(string.Join(" ", Modifiers));
+
+        if (Attributes.Count > 0)
+            parts.Add(string.Join(" ", Attributes.Select(a => $"[{a}]")));
+
         if (!string.IsNullOrEmpty(Signature))
             parts.Add(Signature);
         else
@@ -137,22 +143,54 @@ public class CodeChunk
 
     /// <summary>
     /// Full text returned when this chunk is retrieved as context for an LLM prompt.
+    /// Includes all semantic metadata captured at index time so the model sees the
+    /// same intent signals (attributes, modifiers, graph relationships) the embedder did.
     /// </summary>
     public string ToRetrievalText()
     {
         var parts = new List<string>
         {
-            $"// {FilePath}:{LineNumber}  ({Language})",
+            $"// {FilePath}:{LineNumber}-{EndLineNumber}  ({Language}{(string.IsNullOrEmpty(ProjectName) ? "" : $", project: {ProjectName}")})",
         };
 
-        if (!string.IsNullOrEmpty(Signature))
-            parts.Add(Signature);
+        if (!string.IsNullOrEmpty(Namespace) || !string.IsNullOrEmpty(ClassName))
+        {
+            var loc = string.IsNullOrEmpty(Namespace)
+                ? ClassName
+                : (string.IsNullOrEmpty(ClassName) ? Namespace : $"{Namespace}.{ClassName}");
+            parts.Add($"// in {loc}  [{Kind}]");
+        }
+        else
+        {
+            parts.Add($"// [{Kind}]");
+        }
+
+        if (Attributes.Count > 0)
+            parts.Add(string.Join(" ", Attributes.Select(a => $"[{a}]")));
+
+        var header = Modifiers.Count > 0
+            ? $"{string.Join(" ", Modifiers)} {Signature ?? FunctionName}"
+            : (Signature ?? FunctionName);
+        parts.Add(header);
+
+        if (BaseTypes.Count > 0)
+            parts.Add($"// inherits: {string.Join(", ", BaseTypes)}");
+
+        if (Interfaces.Count > 0)
+            parts.Add($"// implements: {string.Join(", ", Interfaces)}");
 
         if (!string.IsNullOrEmpty(Documentation))
             parts.Add(Documentation);
 
         if (!string.IsNullOrEmpty(Body))
             parts.Add(Body);
+
+        if (Calls.Count > 0)
+        {
+            var sample = Calls.Take(15).ToList();
+            var suffix = Calls.Count > sample.Count ? $", … (+{Calls.Count - sample.Count} more)" : "";
+            parts.Add($"// calls: {string.Join(", ", sample)}{suffix}");
+        }
 
         return string.Join("\n", parts);
     }

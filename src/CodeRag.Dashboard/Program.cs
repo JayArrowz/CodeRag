@@ -1,6 +1,7 @@
 using CodeRag.Analyzers.CSharp;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
+using CodeRag.Dashboard.Api;
 using CodeRag.Dashboard.Components;
 using CodeRag.Dashboard.Services;
 using CodeRag.Storage.Embeddings;
@@ -32,10 +33,23 @@ else
 builder.Services.AddSingleton<ILanguageAnalyzer, RoslynAnalyzer>();
 builder.Services.AddSingleton<CodebaseIndexer>();
 builder.Services.AddSingleton<IndexingJobService>();
+builder.Services.AddScoped<CodeExplorerService>();
 
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+// HTTP API (mirrors the CLI; future MCP server target).
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "CodeRag API",
+        Version = "v1",
+        Description = "HTTP surface for indexing, semantic search, and graph queries."
+    });
+});
 
 var app = builder.Build();
 
@@ -65,6 +79,15 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseAntiforgery();
+
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "CodeRag API v1");
+    c.RoutePrefix = "swagger";
+});
+
+app.MapCodeRagApi();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

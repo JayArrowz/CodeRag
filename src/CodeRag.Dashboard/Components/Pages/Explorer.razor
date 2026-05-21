@@ -1,0 +1,435 @@
+@page "/explore"
+@page "/explore/{WorkspaceName}"
+@using CodeRag.Storage.Postgres.Entities
+
+@inject CodeExplorerService ExplorerSvc
+@inject IVectorStore Store
+
+<PageTitle>Explorer@(WorkspaceName is not null ? $" — {WorkspaceName}" : "")</PageTitle>
+
+@if (WorkspaceName is null)
+{
+    <h1>Code Explorer</h1>
+    <div class="card" style="max-width:400px">
+        <h3>Choose a workspace</h3>
+        @if (_workspaces is null)
+        {
+            <p class="muted">Loading…</p>
+        }
+        else if (_workspaces.Count == 0)
+        {
+            <p class="muted">No workspaces indexed yet. <a href="index">Run an index first.</a></p>
+        }
+        else
+        {
+            <ul class="explorer-pick">
+                @foreach (var w in _workspaces)
+                {
+                    <li><a href="explore/@Uri.EscapeDataString(w.Workspace)">@w.Workspace</a></li>
+                }
+            </ul>
+        }
+    </div>
+}
+else
+{
+    <div class="explorer-header">
+        <h1>
+            <a href="explore" style="font-weight:400;font-size:0.85rem;color:var(--text-dim)">Explore</a>
+            <span style="color:var(--text-dim)"> / </span>
+            @WorkspaceName
+        </h1>
+    </div>
+
+    <div class="explorer-layout">
+
+        <!-- ── TREE PANEL ──────────────────────────────────── -->
+        <div class="explorer-tree">
+            @if (_projects is null)
+            {
+                <p class="muted">Loading…</p>
+            }
+            else if (_projects.Count == 0)
+            {
+                <p class="muted">No chunks in this workspace.</p>
+            }
+            else
+            {
+                @foreach (var proj in _projects)
+                {
+                    <div class="xnode">
+                        <div class="xrow xrow-proj" @onclick="() => ToggleProjectAsync(proj)">
+                            <span class="xtoggle">@(proj.Expanded ? "▾" : "▸")</span>
+                            <span class="badge info" style="flex-shrink:0">proj</span>
+                            <strong>@proj.Name</strong>
+                        </div>
+                        @if (proj.Expanded)
+                        {
+                            @if (!proj.Loaded)
+                            {
+                                <div class="xchild muted xloading">Loading…</div>
+                            }
+                            else
+                            {
+                                @foreach (var ns in proj.Namespaces)
+                                {
+                                    <div class="xnode xchild">
+                                        <div class="xrow xrow-ns" @onclick="() => ToggleNamespaceAsync(ns)">
+                                            <span class="xtoggle">@(ns.Expanded ? "▾" : "▸")</span>
+                                            <span class="mono muted">@ns.Name</span>
+                                        </div>
+                                        @if (ns.Expanded)
+                                        {
+                                            @if (!ns.Loaded)
+                                            {
+                                                <div class="xchild muted xloading">Loading…</div>
+                                            }
+                                            else if (ns.Classes.Count == 0)
+                                            {
+                                                <div class="xchild muted xloading">No classes</div>
+                                            }
+                                            else
+                                            {
+                                                @foreach (var cls in ns.Classes)
+                                                {
+                                                    <div class="xnode xchild">
+                                                        <div class="xrow xrow-cls" @onclick="() => ToggleClassAsync(cls)">
+                                                            <span class="xtoggle">@(cls.Expanded ? "▾" : "▸")</span>
+                                                            <span class="mono">@cls.Name</span>
+                                                        </div>
+                                                        @if (cls.Expanded)
+                                                        {
+                                                            @if (!cls.Loaded)
+                                                            {
+                                                                <div class="xchild muted xloading">Loading…</div>
+                                                            }
+                                                            else if (cls.Members.Count == 0)
+                                                            {
+                                                                <div class="xchild muted xloading">Empty</div>
+                                                            }
+                                                            else
+                                                            {
+                                                                @foreach (var m in cls.Members)
+                                                                {
+                                                                    var active = _selectedChunk?.Id == m.Id;
+                                                                    <div class="xrow xrow-member xchild @(active ? "xactive" : "")"
+                                                                         @onclick="() => SelectChunkAsync(m.Id)">
+                                                                        <span class="badge @KindClass(m.Kind)"
+                                                                              style="min-width:3.2rem;text-align:center;flex-shrink:0">
+                                                                            @ShortKind(m.Kind)
+                                                                        </span>
+                                                                        <span class="mono" style="overflow:hidden;text-overflow:ellipsis">@m.FunctionName</span>
+                                                                    </div>
+                                                                }
+                                                            }
+                                                        }
+                                                    </div>
+                                                }
+                                            }
+                                        }
+                                    </div>
+                                }
+                            }
+                        }
+                    </div>
+                }
+            }
+        </div>
+
+        <!-- ── DETAIL PANEL ────────────────────────────────── -->
+        <div class="explorer-detail">
+            @if (_selectedChunk is null)
+            {
+                <div class="muted" style="padding:2.5rem 1rem;text-align:center">
+                    ← Expand a class in the tree and select a member
+                </div>
+            }
+            else
+            {
+                var c = _selectedChunk;
+
+                <div class="card">
+                    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;margin-bottom:0.6rem">
+                        <span class="badge @KindClass(c.Kind)">@c.Kind</span>
+                        <span class="badge">@c.Language</span>
+                        @foreach (var mod in c.Modifiers)
+                        {
+                            <span class="badge">@mod</span>
+                        }
+                    </div>
+                    <div class="mono" style="font-size:0.95rem;font-weight:600;word-break:break-all">
+                        @(c.Signature ?? c.FunctionName)
+                    </div>
+                    <div class="muted mono" style="font-size:0.78rem;margin-top:0.3rem">
+                        @c.FilePath<span>:@c.LineNumber</span>
+                        @if (c.EndLineNumber > c.LineNumber)
+                        {
+                            <span>–@c.EndLineNumber</span>
+                        }
+                        @if (!string.IsNullOrEmpty(c.ProjectName))
+                        {
+                            <span style="margin-left:0.5rem">· @c.ProjectName</span>
+                        }
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(c.ReturnType))
+                    {
+                        <div style="margin-top:0.5rem">
+                            <span class="muted">Returns </span><span class="mono">@c.ReturnType</span>
+                        </div>
+                    }
+                    @if (c.Parameters.Count > 0)
+                    {
+                        <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+                            <span class="muted" style="flex-shrink:0">Params</span>
+                            @foreach (var p in c.Parameters)
+                            {
+                                <span class="badge mono">@p</span>
+                            }
+                        </div>
+                    }
+                    @if (c.BaseTypes.Count > 0)
+                    {
+                        <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+                            <span class="muted" style="flex-shrink:0">Extends</span>
+                            @foreach (var b in c.BaseTypes)
+                            {
+                                <span class="badge mono">@b</span>
+                            }
+                        </div>
+                    }
+                    @if (c.Interfaces.Count > 0)
+                    {
+                        <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+                            <span class="muted" style="flex-shrink:0">Implements</span>
+                            @foreach (var iface in c.Interfaces)
+                            {
+                                <span class="badge mono">@iface</span>
+                            }
+                        </div>
+                    }
+                    @if (c.Attributes.Count > 0)
+                    {
+                        <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+                            <span class="muted" style="flex-shrink:0">Attributes</span>
+                            @foreach (var attr in c.Attributes)
+                            {
+                                <span class="badge mono">[@attr]</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(c.Documentation))
+                {
+                    <div class="card">
+                        <h3>Documentation</h3>
+                        <div style="line-height:1.5">@c.Documentation</div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(c.Body))
+                {
+                    <div class="card">
+                        <h3>
+                            Source body
+                            <span class="muted" style="font-size:0.75rem;font-weight:400">
+                                · @(c.EndLineNumber - c.LineNumber + 1) lines
+                            </span>
+                        </h3>
+                        <pre class="code" style="max-height:480px;overflow:auto">@c.Body</pre>
+                    </div>
+                }
+
+                @if (_outgoing is { Count: > 0 })
+                {
+                    <div class="card">
+                        <h3>Calls <span class="muted" style="font-weight:400">(@_outgoing.Count)</span></h3>
+                        @foreach (var e in _outgoing)
+                        {
+                            <div class="edge-row">
+                                <span class="badge @(e.IsExternal ? "warn" : "info")"
+                                      style="flex-shrink:0;min-width:2.4rem;text-align:center">
+                                    @(e.IsExternal ? "ext" : "int")
+                                </span>
+                                @if (e.TargetChunkId.HasValue)
+                                {
+                                    <button class="link-btn" @onclick="() => SelectChunkAsync(e.TargetChunkId!.Value)">
+                                        @e.TargetSignature
+                                    </button>
+                                }
+                                else
+                                {
+                                    <span class="mono muted" title="@e.TargetDocumentation">@e.TargetSignature</span>
+                                }
+                                @if (e.LineNumber > 0)
+                                {
+                                    <span class="muted" style="font-size:0.75rem;margin-left:auto;flex-shrink:0">:@e.LineNumber</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(e.TargetDocumentation))
+                            {
+                                <div class="muted" style="font-size:0.78rem;margin:-0.1rem 0 0.5rem 3rem;line-height:1.4;white-space:pre-wrap">@e.TargetDocumentation</div>
+                            }
+                        }
+                    </div>
+                }
+
+                @if (_incoming is { Count: > 0 })
+                {
+                    <div class="card">
+                        <h3>Called by <span class="muted" style="font-weight:400">(@_incoming.Count)</span></h3>
+                        @foreach (var e in _incoming)
+                        {
+                            <div class="edge-row">
+                                <button class="link-btn" @onclick="() => SelectChunkAsync(e.SourceChunkId)">
+                                    @e.SourceSignature
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (_outgoing is { Count: 0 } && _incoming is { Count: 0 })
+                {
+                    <div class="card muted" style="font-size:0.85rem">No call-graph edges recorded for this member.</div>
+                }
+            }
+        </div>
+
+    </div>
+}
+
+@code {
+    [Parameter] public string? WorkspaceName { get; set; }
+
+    List<WorkspaceInfo>? _workspaces;
+    List<ProjectNode>?   _projects;
+    CodeChunkEntity?     _selectedChunk;
+    List<CodeEdgeEntity>? _outgoing;
+    List<CodeEdgeEntity>? _incoming;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (WorkspaceName is null)
+            _workspaces = await Store.ListWorkspacesAsync();
+        else
+            await LoadProjectsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Handles navigation between different /explore/{ws} routes
+        if (WorkspaceName is not null && _projects is null)
+            await LoadProjectsAsync();
+    }
+
+    async Task LoadProjectsAsync()
+    {
+        var names = await ExplorerSvc.GetProjectsAsync(WorkspaceName!);
+        _projects = names.Select(n => new ProjectNode { Name = n }).ToList();
+        _selectedChunk = null;
+        _outgoing = null;
+        _incoming = null;
+    }
+
+    async Task ToggleProjectAsync(ProjectNode proj)
+    {
+        proj.Expanded = !proj.Expanded;
+        if (proj.Expanded && !proj.Loaded)
+        {
+            var namespaces = await ExplorerSvc.GetNamespacesAsync(WorkspaceName!, proj.Name);
+            proj.Namespaces = namespaces
+                .Select(n => new NamespaceNode { Workspace = WorkspaceName!, Project = proj.Name, Name = n })
+                .ToList();
+            proj.Loaded = true;
+        }
+    }
+
+    async Task ToggleNamespaceAsync(NamespaceNode ns)
+    {
+        ns.Expanded = !ns.Expanded;
+        if (ns.Expanded && !ns.Loaded)
+        {
+            var classes = await ExplorerSvc.GetClassesAsync(ns.Workspace, ns.Project, ns.Name);
+            ns.Classes = classes
+                .Select(c => new ClassNode { Workspace = ns.Workspace, Project = ns.Project, Namespace = ns.Name, Name = c })
+                .ToList();
+            ns.Loaded = true;
+        }
+    }
+
+    async Task ToggleClassAsync(ClassNode cls)
+    {
+        cls.Expanded = !cls.Expanded;
+        if (cls.Expanded && !cls.Loaded)
+        {
+            cls.Members = await ExplorerSvc.GetMembersAsync(cls.Workspace, cls.Project, cls.Namespace, cls.Name);
+            cls.Loaded = true;
+        }
+    }
+
+    async Task SelectChunkAsync(Guid id)
+    {
+        _selectedChunk = await ExplorerSvc.GetChunkAsync(id);
+        if (_selectedChunk is not null)
+        {
+            _outgoing = await ExplorerSvc.GetOutgoingEdgesAsync(id);
+            _incoming = await ExplorerSvc.GetIncomingEdgesAsync(id);
+        }
+    }
+
+    static string KindClass(string kind) => kind switch
+    {
+        "method_declaration" or "constructor"                     => "ok",
+        "class_declaration" or "interface_declaration"
+            or "struct_declaration" or "enum_declaration"         => "info",
+        "library_call"                                            => "warn",
+        _                                                         => ""
+    };
+
+    static string ShortKind(string kind) => kind switch
+    {
+        "method_declaration"    => "meth",
+        "constructor"           => "ctor",
+        "class_declaration"     => "class",
+        "interface_declaration" => "iface",
+        "struct_declaration"    => "struct",
+        "enum_declaration"      => "enum",
+        "property_declaration"  => "prop",
+        "field_declaration"     => "field",
+        "library_call"          => "lib",
+        _ => kind.Length > 6 ? kind[..6] : kind
+    };
+
+    // ── Tree node models ──────────────────────────────────────────────────────
+
+    class ProjectNode
+    {
+        public string Name { get; set; } = "";
+        public bool Expanded { get; set; }
+        public bool Loaded   { get; set; }
+        public List<NamespaceNode> Namespaces { get; set; } = [];
+    }
+
+    class NamespaceNode
+    {
+        public string Workspace { get; set; } = "";
+        public string Project   { get; set; } = "";
+        public string Name      { get; set; } = "";
+        public bool Expanded    { get; set; }
+        public bool Loaded      { get; set; }
+        public List<ClassNode> Classes { get; set; } = [];
+    }
+
+    class ClassNode
+    {
+        public string Workspace { get; set; } = "";
+        public string Project   { get; set; } = "";
+        public string Namespace { get; set; } = "";
+        public string Name      { get; set; } = "";
+        public bool Expanded    { get; set; }
+        public bool Loaded      { get; set; }
+        public List<CodeChunkEntity> Members { get; set; } = [];
+    }
+}

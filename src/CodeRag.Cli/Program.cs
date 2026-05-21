@@ -156,7 +156,8 @@ async Task Query(string[] args)
     };
     var indexer = sp.GetRequiredService<CodebaseIndexer>();
     var store = sp.GetRequiredService<IVectorStore>();
-    var results = await indexer.QueryAsync(queryText, topK, filter);
+    bool lean = opts.ContainsKey("lean");
+    var results = await indexer.QueryAsync(queryText, topK, filter, hydrateEdges: !lean);
 
     if (results.Count == 0)
     {
@@ -165,6 +166,19 @@ async Task Query(string[] args)
     }
 
     bool expand = opts.ContainsKey("expand");
+    bool retrievalText = opts.ContainsKey("retrieval-text");
+
+    if (retrievalText)
+    {
+        // Emit the exact text an LLM would receive — useful for piping into prompts.
+        for (int i = 0; i < results.Count; i++)
+        {
+            Console.WriteLine($"// === result {i + 1}/{results.Count}  score {results[i].Score:F4} ===");
+            Console.WriteLine(results[i].ToRetrievalText());
+            Console.WriteLine();
+        }
+        return;
+    }
 
     Console.WriteLine($"\n{"Score",-8} {"Kind",-22} {"Name",-40} {"Location",-50}");
     Console.WriteLine(new string('-', 120));
@@ -180,6 +194,10 @@ async Task Query(string[] args)
             Console.WriteLine($"         [workspace: {c.Workspace}{(c.ProjectName is null ? "" : $" / {c.ProjectName}")}]");
         if (!string.IsNullOrEmpty(c.Signature))
             Console.WriteLine($"         {c.Signature}");
+        if (c.Modifiers.Count > 0)
+            Console.WriteLine($"         modifiers: {string.Join(" ", c.Modifiers)}");
+        if (c.Attributes.Count > 0)
+            Console.WriteLine($"         attributes: {string.Join(" ", c.Attributes.Select(a => $"[{a}]"))}");
         if (c.BaseTypes.Count > 0)
             Console.WriteLine($"         inherits: {string.Join(", ", c.BaseTypes)}");
         if (c.Interfaces.Count > 0)
@@ -187,9 +205,25 @@ async Task Query(string[] args)
         if (c.Calls.Count > 0)
             Console.WriteLine($"         calls ({c.Calls.Count}): {string.Join(", ", c.Calls.Take(5))}{(c.Calls.Count > 5 ? ", ..." : "")}");
 
+        // Outgoing edges are hydrated by default — show external library docs inline.
+        if (r.OutgoingEdges is { Count: > 0 })
+        {
+            var externals = r.OutgoingEdges
+                .Where(e => e.IsExternal && !string.IsNullOrWhiteSpace(e.TargetDocumentation))
+                .GroupBy(e => e.TargetSignature).Select(g => g.First()).Take(5).ToList();
+            foreach (var e in externals)
+            {
+                var firstDocLine = e.TargetDocumentation!
+                    .Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+                Console.WriteLine($"         lib {e.TargetSignature}");
+                if (firstDocLine.Length > 0)
+                    Console.WriteLine($"             {Truncate(firstDocLine, 140)}");
+            }
+        }
+
         if (expand)
         {
-            var outgoing = await store.GetOutgoingEdgesAsync(c.Id);
+            var outgoing = r.OutgoingEdges ?? await store.GetOutgoingEdgesAsync(c.Id);
             var incoming = await store.GetIncomingEdgesAsync(c.Id);
 
             if (incoming.Count > 0)
@@ -212,6 +246,8 @@ async Task Query(string[] args)
         Console.WriteLine();
     }
 }
+
+static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max - 1) + "…";
 
 async Task Stats()
 {

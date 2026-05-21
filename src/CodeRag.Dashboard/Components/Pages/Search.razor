@@ -68,6 +68,16 @@
             {
                 <div class="muted" style="margin-top:0.4rem">@c.Documentation</div>
             }
+            @if (c.Attributes.Count > 0)
+            {
+                <div style="margin-top:0.4rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+                    <span class="muted" style="flex-shrink:0;font-size:0.8rem">Attributes</span>
+                    @foreach (var attr in c.Attributes)
+                    {
+                        <span class="badge mono">[@attr]</span>
+                    }
+                </div>
+            }
             @if (!string.IsNullOrEmpty(c.Body))
             {
                 <details style="margin-top:0.4rem">

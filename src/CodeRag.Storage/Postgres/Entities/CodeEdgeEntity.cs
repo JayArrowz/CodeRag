@@ -40,6 +40,9 @@ public class CodeEdgeEntity
     [MaxLength(300)]
     public string? TargetAssembly { get; set; }
 
+    [Column("target_documentation")]
+    public string? TargetDocumentation { get; set; }
+
     [Column("edge_kind")]
     [MaxLength(30)]
     public string EdgeKind { get; set; } = "calls";
