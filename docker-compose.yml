@@ -34,6 +34,9 @@ services:
       CODERAG_Embedding__Dimensions: "${CODERAG_Embedding__Dimensions:-3072}"
       # ── ASP.NET Core ────────────────────────────────────────────────────────
       ASPNETCORE_ENVIRONMENT: Production
+      # Dev-cert password — must match the CERT_PASSWORD build arg used when
+      # the image was built (default: coderag-dev).
+      ASPNETCORE_Kestrel__Certificates__Default__Password: "${CERT_PASSWORD:-coderag-dev}"
       # ── Persistence ─────────────────────────────────────────────────────────
       # Watches are stored in the named volume below so they survive restarts.
       CODERAG_WatchesFile: /data/watches.json
@@ -43,7 +46,7 @@ services:
       # Mount source folders you want to index from the dashboard.
       # Paths typed in the Index page must exist *inside* the container.
       # Override WORKSPACE_PATH in .env to mount a different host directory.
-      - ${WORKSPACE_PATH:-.}:/workspace:ro
+      - ${WORKSPACE_PATH:-.}:/workspace:rw
       # Persistent watch store — survives container restarts.
       - ${WATCHES_DATA_PATH:-watches-data}:/data
 

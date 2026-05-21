@@ -113,7 +113,7 @@ public class CodebaseIndexer
             }
         }
 
-        StampWorkspace(allChunks, allEdges, workspace);
+        StampWorkspace(allChunks, allEdges, workspace, projectName);
         ResolveEdgeTargets(allChunks, allEdges);
         await EmbedAndStore(allChunks, allEdges, stats, ct);
 
@@ -140,7 +140,11 @@ public class CodebaseIndexer
         Console.WriteLine($"Analyzing solution: {solutionPath} (workspace: {workspace})");
         var result = await solutionAnalyzer.AnalyzeSolutionAsync(solutionPath, workspace);
 
-        StampWorkspace(result.Chunks, result.Edges, workspace);
+        // Derive a project name from the solution/config path so chunks are tagged consistently.
+        var derivedProject = Path.GetFileName(solutionPath).Equals("tsconfig.json", StringComparison.OrdinalIgnoreCase)
+            ? (Path.GetFileName(Path.GetDirectoryName(solutionPath)) ?? Path.GetFileNameWithoutExtension(solutionPath))
+            : Path.GetFileNameWithoutExtension(solutionPath);
+        StampWorkspace(result.Chunks, result.Edges, workspace, derivedProject);
         await EmbedAndStore(result.Chunks, result.Edges, stats, ct);
 
         sw.Stop();
@@ -496,12 +500,18 @@ public class CodebaseIndexer
         return name.Length == 0 ? null : name;
     }
 
-    private static void StampWorkspace(List<CodeChunk> chunks, List<CodeEdge> edges, string workspace)
+    private static void StampWorkspace(List<CodeChunk> chunks, List<CodeEdge> edges, string workspace, string? projectName = null)
     {
         foreach (var c in chunks)
+        {
             if (string.IsNullOrEmpty(c.Workspace)) c.Workspace = workspace;
+            if (!string.IsNullOrEmpty(projectName) && string.IsNullOrEmpty(c.ProjectName)) c.ProjectName = projectName;
+        }
         foreach (var e in edges)
+        {
             if (string.IsNullOrEmpty(e.Workspace)) e.Workspace = workspace;
+            if (!string.IsNullOrEmpty(projectName) && string.IsNullOrEmpty(e.ProjectName)) e.ProjectName = projectName;
+        }
     }
 
     private bool IsExcluded(string path)
@@ -612,7 +622,7 @@ public class CodebaseIndexer
             }
         }
 
-        StampWorkspace(allChunks, allEdges, workspace);
+        StampWorkspace(allChunks, allEdges, workspace, projectName);
         ResolveEdgeTargets(allChunks, allEdges);
         await EmbedAndStore(allChunks, allEdges, stats, ct);
 
@@ -766,7 +776,7 @@ public class CodebaseIndexer
             }
         }
 
-        StampWorkspace(combinedChunks, combinedEdges, workspace);
+        StampWorkspace(combinedChunks, combinedEdges, workspace, projectName);
         await EmbedAndStore(combinedChunks, combinedEdges, stats, ct);
 
         sw.Stop();

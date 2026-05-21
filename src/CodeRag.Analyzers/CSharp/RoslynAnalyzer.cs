@@ -167,6 +167,14 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         return _workspaceCache.GetOrAdd(key, async path =>
         {
             EnsureMSBuildRegistered();
+
+            // project.assets.json files generated on Windows embed Windows-specific NuGet
+            // fallback folder paths (e.g. C:\Program Files (x86)\Microsoft Visual Studio\...).
+            // On Linux those paths don't exist, causing ResolvePackageAssets to throw.
+            // Running dotnet restore first regenerates the assets file with paths valid for the
+            // current environment and downloads any missing packages.
+            await RunDotnetRestoreAsync(path);
+
             var ws = MSBuildWorkspace.Create();
             ws.WorkspaceFailed += (_, e) =>
             {
@@ -189,6 +197,54 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             }
             return ws;
         });
+    }
+
+    /// <summary>
+    /// Runs <c>dotnet restore</c> on <paramref name="solutionOrProjectPath"/> so that
+    /// <c>project.assets.json</c> is regenerated for the current environment before
+    /// MSBuildWorkspace tries to resolve package assets.
+    /// </summary>
+    private static async Task RunDotnetRestoreAsync(string solutionOrProjectPath)
+    {
+        // .slnx files aren't directly accepted by dotnet restore; find the directory
+        // and restore from there (dotnet will discover the solution).
+        var restoreTarget = solutionOrProjectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(solutionOrProjectPath) ?? solutionOrProjectPath
+            : solutionOrProjectPath;
+
+        Console.WriteLine($"  Running dotnet restore: {restoreTarget}");
+        try
+        {
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "dotnet",
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+            };
+            psi.ArgumentList.Add("restore");
+            psi.ArgumentList.Add(restoreTarget);
+            psi.ArgumentList.Add("--verbosity");
+            psi.ArgumentList.Add("quiet");
+
+            using var proc = new System.Diagnostics.Process { StartInfo = psi };
+            proc.Start();
+            // Drain streams so the process can't deadlock on full buffers.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
+            await proc.WaitForExitAsync(cts.Token);
+            var stderr = await stderrTask;
+            if (proc.ExitCode != 0 && !string.IsNullOrWhiteSpace(stderr))
+                Console.Error.WriteLine($"  dotnet restore warnings/errors: {stderr.Trim()}");
+        }
+        catch (Exception ex)
+        {
+            // Restore failure is non-fatal — MSBuildWorkspace will still attempt to load
+            // the project and may succeed if packages were previously restored.
+            Console.Error.WriteLine($"  dotnet restore failed ({ex.Message}); proceeding anyway.");
+        }
     }
 
     /// <summary>

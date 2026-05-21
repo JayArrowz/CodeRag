@@ -8,6 +8,8 @@ using CodeRag.Dashboard.Components;
 using CodeRag.Dashboard.Services;
 using CodeRag.Storage;
 using CodeRag.Storage.Embeddings;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,6 +17,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables("CODERAG_");
 
 var config = builder.Configuration;
+
+// Persist Data Protection keys to the watches volume so antiforgery tokens
+// survive container restarts (without this, every restart invalidates cookies).
+var keysPath = config["DataProtection:KeysPath"] ?? "/data/keys";
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysPath));
 
 // CodeRag pipeline
 builder.Services.AddVectorStore(config);
@@ -38,7 +46,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    c.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CodeRag API",
         Version = "v1",
