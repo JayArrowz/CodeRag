@@ -16,11 +16,6 @@ public static class EmbeddingServiceFactory
     {
         var opts = config.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
 
-        // Legacy flat keys still work if the new Embedding section is absent.
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
-            opts.ApiKey = config["OpenAiApiKey"] ?? "";
-        if (string.IsNullOrWhiteSpace(opts.Model))
-            opts.Model = config["EmbeddingModel"] ?? "";
         if (opts.Dimensions == 0 && int.TryParse(config["EmbeddingDimensions"], out var d))
             opts.Dimensions = d;
 
@@ -42,8 +37,16 @@ public static class EmbeddingServiceFactory
         {
             EmbeddingProviderType.OpenAI => BuildOpenAi(opts),
             EmbeddingProviderType.Google => BuildGoogle(opts),
+            EmbeddingProviderType.Ollama => BuildOllama(opts),
             _ => throw new InvalidOperationException($"Unknown embedding provider: {opts.Provider}"),
         };
+    }
+
+    private static IEmbeddingService BuildOllama(EmbeddingOptions opts)
+    {
+        var model = string.IsNullOrWhiteSpace(opts.Model) ? "text-embedding-3-small" : opts.Model;
+        var dims = opts.Dimensions > 0 ? opts.Dimensions : 1536;
+        return new OllamaEmbeddingService(model, dims, opts.BaseUrl ?? "http://localhost:11434", opts.ApiKey);
     }
 
     private static IEmbeddingService BuildOpenAi(EmbeddingOptions opts)

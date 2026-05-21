@@ -4,6 +4,7 @@ public enum EmbeddingProviderType
 {
     OpenAI,
     Google,
+    Ollama
 }
 
 /// <summary>

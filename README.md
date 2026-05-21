@@ -77,9 +77,50 @@ Every stage is individually toggleable via `QueryOptions`.
 
 ## Quick Start
 
-### 1. Start the database
+### Option A — Docker Compose (recommended)
 
-**PostgreSQL** (recommended):
+Runs the dashboard **and** PostgreSQL together with a single command. No local .NET or Node.js install needed.
+
+**1. Copy the example env file and fill in your embedding API key:**
+
+```bash
+cp .env.example .env
+# edit .env and set CODERAG_Embedding__ApiKey
+```
+
+**2. Build and start everything:**
+
+```bash
+docker compose up -d --build
+```
+
+The first build takes a few minutes (restores NuGet packages, runs `npm ci`). Subsequent starts are instant.
+
+**3. Open the dashboard:**
+
+```
+https://localhost:5180
+```
+
+The self-signed dev certificate will trigger a browser security warning — click **Advanced → Proceed** to continue.
+
+> **Indexing paths**: the host directory set by `WORKSPACE_PATH` in your `.env` file (default: the repo root) is mounted read-write at `/workspace` inside the container. All paths entered in the dashboard must use this prefix — e.g. `/workspace/myapp` maps to `$WORKSPACE_PATH/myapp` on the host.
+
+**Tear down** (keeps data volumes):
+```bash
+docker compose down
+```
+
+**Full reset** (destroys all indexed data):
+```bash
+docker compose down -v
+```
+
+---
+
+### Option B — Local (bare metal)
+
+### 1. Start the database
 
 ```bash
 docker compose up -d
@@ -111,16 +152,12 @@ dotnet run --project src/CodeRag.Dashboard
 
 The database schema is created automatically on first run. Open `https://localhost:5001` in your browser.
 
-**Docker**: the dashboard is served on **port 5180**. After `docker compose up -d`, open `http://localhost:5180`.
-
 ### 4. Index your code
 
 Navigate to **Index** in the sidebar and either:
 
 - **Index a solution** -- provide the path to a `.sln` or `.slnx` file and a workspace name. Uses full Roslyn semantic analysis (cross-file call edges, type resolution).
 - **Index a directory** -- provide any source directory path, workspace name, and optional project name. Uses fast structure-only analysis.
-
-> **Docker path note**: the host directory is mounted read-only at `/workspace` inside the container (see `docker-compose.yml`). All paths entered in the dashboard must use this prefix. For example, if your repo lives at `C:\Users\you\source\myapp` on the host, enter `/workspace/myapp` in the Index page. You can override the mounted host directory with `WORKSPACE_PATH` in your `.env` file.
 
 After indexing completes the job page shows stats and a `FileSystemWatcher` is automatically registered for the indexed path so future file changes are reindexed incrementally.
 
