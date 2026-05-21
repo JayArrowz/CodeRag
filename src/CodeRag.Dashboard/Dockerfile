@@ -6,7 +6,7 @@ WORKDIR /app/tools/ts-analyzer
 COPY tools/ts-analyzer/ ./
 RUN npm ci --omit=dev
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Restore (cache-friendly: copy only csprojs first)
@@ -22,7 +22,7 @@ COPY . .
 RUN dotnet publish src/CodeRag.Dashboard/CodeRag.Dashboard.csproj \
         -c Release -o /app/publish /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS runtime
 
 # Install Node.js 20 (required for the TypeScript analyzer sidecar)
 RUN apt-get update \

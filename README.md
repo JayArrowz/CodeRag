@@ -111,12 +111,16 @@ dotnet run --project src/CodeRag.Dashboard
 
 The database schema is created automatically on first run. Open `https://localhost:5001` in your browser.
 
+**Docker**: the dashboard is served on **port 5180**. After `docker compose up -d`, open `http://localhost:5180`.
+
 ### 4. Index your code
 
 Navigate to **Index** in the sidebar and either:
 
 - **Index a solution** -- provide the path to a `.sln` or `.slnx` file and a workspace name. Uses full Roslyn semantic analysis (cross-file call edges, type resolution).
 - **Index a directory** -- provide any source directory path, workspace name, and optional project name. Uses fast structure-only analysis.
+
+> **Docker path note**: the host directory is mounted read-only at `/workspace` inside the container (see `docker-compose.yml`). All paths entered in the dashboard must use this prefix. For example, if your repo lives at `C:\Users\you\source\myapp` on the host, enter `/workspace/myapp` in the Index page. You can override the mounted host directory with `WORKSPACE_PATH` in your `.env` file.
 
 After indexing completes the job page shows stats and a `FileSystemWatcher` is automatically registered for the indexed path so future file changes are reindexed incrementally.
 
@@ -288,6 +292,57 @@ kind, file_path, line_number, project_name, is_external
 ```
 
 Indexed on: `workspace`, `source_chunk_id`, `target_chunk_id`, `target_signature`, `kind`.
+
+## MCP / AI Assistant Integration
+
+CodeRag ships an **MCP (Model Context Protocol) server** as an npm package. It exposes two tools to any MCP-compatible AI assistant (Copilot, Claude, Cursor, etc.):
+
+| Tool | Description |
+|------|-------------|
+| `coderag_query` | Semantic + structural hybrid search over an indexed workspace |
+| `coderag_list_workspaces` | List all indexed workspaces and their stats |
+
+### Install
+
+```bash
+npm install -g @jayarrowz/mcp-coderag
+```
+
+Or run without installing:
+
+```bash
+npx @jayarrowz/mcp-coderag
+```
+
+### Configure
+
+The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at your running dashboard (defaults to `http://localhost:5180`):
+
+**VS Code (`settings.json`):**
+```json
+"mcp": {
+  "servers": {
+    "coderag": {
+      "command": "npx",
+      "args": ["-y", "@jayarrowz/mcp-coderag"],
+      "env": { "CODERAG_URL": "http://localhost:5180" }
+    }
+  }
+}
+```
+
+**Claude Desktop (`claude_desktop_config.json`):**
+```json
+"mcpServers": {
+  "coderag": {
+    "command": "npx",
+    "args": ["-y", "@jayarrowz/mcp-coderag"],
+    "env": { "CODERAG_URL": "http://localhost:5180" }
+  }
+}
+```
+
+The source lives in `src/CodeRag.Mcp/`. See the [npm package](https://www.npmjs.com/package/@jayarrowz/mcp-coderag) for the latest release.
 
 ## Notes
 

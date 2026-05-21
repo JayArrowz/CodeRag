@@ -1,12 +1,32 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coderag
+      POSTGRES_USER: coderag
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coderag -d coderag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   dashboard:
     build:
       context: .
       dockerfile: src/CodeRag.Dashboard/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       # ── Database ────────────────────────────────────────────────────────────
       CODERAG_Database__Provider: "${CODERAG_Database__Provider:-Postgres}"
-      CODERAG_Database__ConnectionString: "${CODERAG_Database__ConnectionString:-Host=51.77.221.59;Database=coderag;Port=1688;Username=revelio-roo;Password=sadfasERE*22L;ConnectionLifeTime=60;}"
+      CODERAG_Database__ConnectionString: "${CODERAG_Database__ConnectionString:-Host=postgres;Port=5432;Database=coderag;Username=coderag;Password=changeme}"
       # ── Embedding ───────────────────────────────────────────────────────────
       CODERAG_Embedding__Provider: "${CODERAG_Embedding__Provider:-Google}"
       CODERAG_Embedding__ApiKey: "${CODERAG_Embedding__ApiKey:-}"
@@ -22,9 +42,12 @@ services:
     volumes:
       # Mount source folders you want to index from the dashboard.
       # Paths typed in the Index page must exist *inside* the container.
-      - ./:/workspace:ro
+      # Override WORKSPACE_PATH in .env to mount a different host directory.
+      - ${WORKSPACE_PATH:-.}:/workspace:ro
       # Persistent watch store — survives container restarts.
-      - watches-data:/data
+      - ${WATCHES_DATA_PATH:-watches-data}:/data
 
 volumes:
+  postgres-data:
   watches-data:
+

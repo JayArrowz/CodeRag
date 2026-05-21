@@ -4,3 +4,6 @@ obj/
 *.user
 appsettings.*.json
 !appsettings.json
+
+# Local environment — never commit secrets
+.env
