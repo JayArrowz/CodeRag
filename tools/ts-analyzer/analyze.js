@@ -80,7 +80,33 @@ function loadProject(input) {
       skipAddingFilesFromTsConfig: false,
       skipFileDependencyResolution: false,
     });
-    return { project, rootDir: path.dirname(abs) };
+    const rootDir = path.dirname(abs);
+
+    // Solution-style / composite tsconfigs use `"files": []` with
+    // `"references": [...]` to point at sub-projects. ts-morph only loads the
+    // root config and so gets 0 source files — it doesn't recurse into
+    // referenced projects automatically. Detect this and pull in files from
+    // each referenced tsconfig so the full project is analysable.
+    const nonDecl = (sf) => !sf.isDeclarationFile() && !sf.isInNodeModules();
+    if (project.getSourceFiles().filter(nonDecl).length === 0) {
+      try {
+        const tsconfigJson = JSON.parse(fs.readFileSync(abs, "utf8"));
+        for (const ref of tsconfigJson.references || []) {
+          let refConfig = path.resolve(rootDir, ref.path);
+          // ref.path may point to a directory — check for tsconfig.json inside.
+          if (!refConfig.endsWith(".json")) {
+            refConfig = path.join(refConfig, "tsconfig.json");
+          }
+          if (fs.existsSync(refConfig)) {
+            project.addSourceFilesFromTsConfig(refConfig);
+          }
+        }
+      } catch {
+        // Best-effort — fall through with whatever files loaded from the root.
+      }
+    }
+
+    return { project, rootDir };
   }
 
   // Directory mode — scan for tsconfig.json, else add all .ts/.tsx files.
