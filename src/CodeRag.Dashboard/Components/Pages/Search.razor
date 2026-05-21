@@ -155,7 +155,7 @@
                     @foreach (var e in r.OutgoingEdges)
                     {
                         <div class="mono" style="font-size:0.8rem;margin-left:0.6rem">
-                            @(e.TargetSignature ?? e.TargetFunctionName) <span class="muted">— @(e.IsLibraryCall ? "library" : "internal")</span>
+                            @(e.TargetSignature ?? e.TargetMemberName) <span class="muted">— @(e.IsExternal ? "external" : "internal") @e.EdgeKind</span>
                         </div>
                     }
                 </details>
