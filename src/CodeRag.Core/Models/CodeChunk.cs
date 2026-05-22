@@ -90,6 +90,10 @@ public class CodeChunk
 
     public DateTime IndexedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>SHA-256 hex digest of the file's UTF-8 text at index time. Used to skip
+    /// unchanged files during sweeps even when mtimes are unreliable.</summary>
+    public string? FileHash { get; set; }
+
     /// <summary>
     /// Text used to generate the embedding vector. Compact, semantic-rich.
     /// </summary>

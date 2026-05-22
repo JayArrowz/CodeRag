@@ -366,6 +366,7 @@ internal abstract class VectorStoreBase<TContext> : IVectorStore
                 ProjectName = g.Key.ProjectName,
                 LastIndexedAt = g.Max(c => c.IndexedAt),
                 ChunkCount = g.Count(),
+                ContentHash = g.Min(c => c.FileHash),
             })
             .ToListAsync(ct);
     }

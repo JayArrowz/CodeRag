@@ -12,4 +12,7 @@ public class FileIndexInfo
     public string? ProjectName { get; init; }
     public DateTime LastIndexedAt { get; init; }
     public int ChunkCount { get; init; }
+    /// <summary>SHA-256 hex digest stored at last index time. Null for files indexed before
+    /// hash tracking was introduced.</summary>
+    public string? ContentHash { get; init; }
 }

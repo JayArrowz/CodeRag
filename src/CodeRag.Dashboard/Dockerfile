@@ -37,6 +37,7 @@ COPY --from=build /app/publish ./
 # Copy ts-analyzer with pre-installed node_modules from the node-deps stage
 COPY --from=node-deps /app/tools/ts-analyzer ./tools/ts-analyzer
 
+ENV DOTNET_USE_POLLING_FILE_WATCHER=1
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 

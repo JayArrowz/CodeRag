@@ -34,6 +34,7 @@ internal static class VectorStoreMapper
         Interfaces = chunk.Interfaces,
         Embedding = chunk.Embedding is not null ? new Vector(chunk.Embedding) : null,
         IndexedAt = chunk.IndexedAt,
+        FileHash = chunk.FileHash,
     };
 
     internal static CodeChunk FromEntity(CodeChunkEntity entity) => new()
@@ -64,6 +65,7 @@ internal static class VectorStoreMapper
         Interfaces = entity.Interfaces,
         Embedding = entity.Embedding?.ToArray(),
         IndexedAt = entity.IndexedAt,
+        FileHash = entity.FileHash,
     };
 
     internal static CodeEdgeEntity ToEdgeEntity(CodeEdge edge) => new()

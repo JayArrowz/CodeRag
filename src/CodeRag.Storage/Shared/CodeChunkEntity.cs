@@ -97,4 +97,7 @@ public class CodeChunkEntity
 
     [Column("indexed_at")]
     public DateTime IndexedAt { get; set; } = DateTime.UtcNow;
+
+    [Column("file_hash")]
+    public string? FileHash { get; set; }
 }

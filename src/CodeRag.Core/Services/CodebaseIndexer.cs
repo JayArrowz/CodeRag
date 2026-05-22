@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Models;
 
@@ -96,7 +98,10 @@ public class CodebaseIndexer
                 {
                     var content = await File.ReadAllTextAsync(file, ct);
                     var relativePath = Path.GetRelativePath(rootPath, file);
-                    return await analyzer.AnalyzeFileAsync(relativePath, content, workspace, projectName);
+                    var result = await analyzer.AnalyzeFileAsync(relativePath, content, workspace, projectName);
+                    var hash = ComputeFileHash(content);
+                    foreach (var c in result.Chunks) c.FileHash = hash;
+                    return result;
                 }
                 catch (Exception ex)
                 {
@@ -613,6 +618,8 @@ public class CodebaseIndexer
             try
             {
                 var result = await analyzer.AnalyzeFileAsync(relativePath, content, workspace, projectName);
+                var hash = ComputeFileHash(content);
+                foreach (var c in result.Chunks) c.FileHash = hash;
                 allChunks.AddRange(result.Chunks);
                 allEdges.AddRange(result.Edges);
             }
@@ -658,6 +665,8 @@ public class CodebaseIndexer
     {
         if (string.IsNullOrWhiteSpace(workspace))
             throw new ArgumentException("Workspace is required.", nameof(workspace));
+
+        projectName ??= Path.GetFileName(projectDir);
 
         var stats = new IndexingStats { Workspace = workspace };
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -737,6 +746,7 @@ public class CodebaseIndexer
             try
             {
                 var result = await analyzer.AnalyzeFilesInSolutionAsync(descriptor, files, workspace);
+                StampFileHashes(result.Chunks, files, projectDir);
                 combinedChunks.AddRange(result.Chunks);
                 combinedEdges.AddRange(result.Edges);
             }
@@ -766,6 +776,8 @@ public class CodebaseIndexer
                 {
                     var content = await File.ReadAllTextAsync(file, ct);
                     var res = await analyzer.AnalyzeFileAsync(file, content, workspace, projectName);
+                    var hash = ComputeFileHash(content);
+                    foreach (var c in res.Chunks) c.FileHash = hash;
                     combinedChunks.AddRange(res.Chunks);
                     combinedEdges.AddRange(res.Edges);
                 }
@@ -799,6 +811,34 @@ public class CodebaseIndexer
     public GitIgnoreMatcher CreateGitIgnoreMatcher(string rootPath)
     {
         return new GitIgnoreMatcher(rootPath, _options.ExcludePatterns, loadGitIgnores: _options.RespectGitIgnore);
+    }
+
+    /// <summary>SHA-256 hex digest of a file's UTF-8 text content.</summary>
+    internal static string ComputeFileHash(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+
+    /// <summary>
+    /// Reads each absolute file path and stamps the SHA-256 hash on every chunk
+    /// whose <see cref="CodeChunk.FilePath"/> matches the corresponding relative path.
+    /// Used after solution-level analysis where the analyzer reads files internally.
+    /// </summary>
+    private static void StampFileHashes(List<CodeChunk> chunks, List<string> absoluteFiles, string projectDir)
+    {
+        var hashByRel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var abs in absoluteFiles)
+        {
+            try
+            {
+                var content = File.ReadAllText(abs);
+                hashByRel[Path.GetRelativePath(projectDir, abs)] = ComputeFileHash(content);
+            }
+            catch { /* best effort */ }
+        }
+        foreach (var chunk in chunks)
+        {
+            if (hashByRel.TryGetValue(chunk.FilePath, out var hash))
+                chunk.FileHash = hash;
+        }
     }
 
     private Dictionary<string, ILanguageAnalyzer> BuildAnalyzerMap()
