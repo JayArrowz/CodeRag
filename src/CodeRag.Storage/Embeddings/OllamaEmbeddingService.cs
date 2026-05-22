@@ -33,8 +33,8 @@ public class OllamaEmbeddingService : IEmbeddingService, IDisposable
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct = default)
     {
-        var res = await _ollamaClient.EmbedAsync(text, ct);
-        return res.Embeddings.FirstOrDefault()?.ToArray() ?? Array.Empty<float>();
+        var res = await EmbedBatchAsync(new[] { text }, ct);
+        return res.FirstOrDefault() ?? Array.Empty<float>();
     }
 
     public async Task<List<float[]>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
@@ -43,6 +43,7 @@ public class OllamaEmbeddingService : IEmbeddingService, IDisposable
         {
             Input = texts.ToList(),
             Model = _model,
+            KeepAlive = "-1"
         }, ct);
         return res.Embeddings;
     }
