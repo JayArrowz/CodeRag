@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using CodeRag.Analyzers.CSharp;
 using CodeRag.Analyzers.TypeScript;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders.Physical;
 
 namespace CodeRag.Dashboard.Services;
 
@@ -30,6 +33,7 @@ public class FileWatcherService : IHostedService, IDisposable
     private readonly IServiceProvider _sp;
     private readonly ILogger<FileWatcherService> _log;
     private readonly int _startupSweepDelaySeconds;
+    private readonly bool _usePolling;
     private readonly ConcurrentDictionary<Guid, RootHandle> _roots = new();
     private readonly ConcurrentQueue<WatchEvent> _events = new();
     private const int MaxEvents = 500;
@@ -41,7 +45,17 @@ public class FileWatcherService : IHostedService, IDisposable
         _sp = sp;
         _log = log;
         _startupSweepDelaySeconds = config.GetValue<int>("Watcher:StartupSweepDelaySeconds", 5);
+        _usePolling = config.GetValue<bool?>("Watcher:UsePolling", null) ?? IsRunningInContainer();
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when the process is running inside a container (Docker, etc.) where
+    /// <see cref="FileSystemWatcher"/> kernel notifications are unreliable.
+    /// </summary>
+    private static bool IsRunningInContainer() =>
+        File.Exists("/.dockerenv") ||
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true",
+            StringComparison.OrdinalIgnoreCase);
 
     public IReadOnlyCollection<WatchEvent> RecentEvents() => _events.ToArray();
     public event Action? Changed;
@@ -246,27 +260,38 @@ public class FileWatcherService : IHostedService, IDisposable
             var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
             var exts = indexer.SupportedExtensions;
             var ignore = indexer.CreateGitIgnoreMatcher(w.Path);
-
-            var fsw = new FileSystemWatcher(w.Path)
+                        
+            FileSystemWatcher? fsw = null;
+            if (!_usePolling)
             {
-                IncludeSubdirectories = w.IncludeSubdirectories,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.DirectoryName,
-                EnableRaisingEvents = false,
-                InternalBufferSize = 64 * 1024,
-            };
+                fsw = new FileSystemWatcher(w.Path)
+                {
+                    IncludeSubdirectories = w.IncludeSubdirectories,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.DirectoryName,
+                    EnableRaisingEvents = false,
+                    InternalBufferSize = 64 * 1024,
+                };
+            }
 
-            var handle = new RootHandle(w, fsw, exts, ignore, _log);
+            var handle = new RootHandle(w, fsw, exts, ignore, _log, _usePolling);
             handle.OnReindex = path => EnqueueReindex(w, path);
             handle.OnRemove = path => EnqueueRemove(w, path);
             handle.OnError = msg => Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, w.Path, WatchEventKind.Error, msg));
-            fsw.Created += handle.OnFsCreated;
-            fsw.Changed += handle.OnFsChanged;
-            fsw.Renamed += handle.OnFsRenamed;
-            fsw.Deleted += handle.OnFsDeleted;
-            fsw.Error += handle.OnFsError;
-            fsw.EnableRaisingEvents = true;
+
+            if (fsw != null)
+            {
+                fsw.Created += handle.OnFsCreated;
+                fsw.Changed += handle.OnFsChanged;
+                fsw.Renamed += handle.OnFsRenamed;
+                fsw.Deleted += handle.OnFsDeleted;
+                fsw.Error += handle.OnFsError;
+                fsw.EnableRaisingEvents = true;
+            }
 
             _roots[w.Id] = handle;
+
+            if (_usePolling)
+                handle.StartPolling();
         }
         catch (Exception ex)
         {
@@ -432,7 +457,8 @@ public class FileWatcherService : IHostedService, IDisposable
             var indexed = await store.ListIndexedFilesAsync(w.Workspace, w.Project, ct);
             var indexedByPath = indexed.ToDictionary(i => i.FilePath, StringComparer.OrdinalIgnoreCase);
 
-            // 3) Diff.
+            // 3) Diff. For files whose mtime advanced, confirm the content actually changed
+            // via a SHA-256 hash before queuing a (potentially expensive) reindex.
             var toReindex = new List<string>();
             foreach (var (rel, info) in disk)
             {
@@ -442,7 +468,9 @@ public class FileWatcherService : IHostedService, IDisposable
                 }
                 else if (info.Mtime > stored.LastIndexedAt.AddSeconds(1)) // 1s slack for fs/db clock skew
                 {
-                    toReindex.Add(info.Abs); // modified while offline
+                    // Hash the on-disk file; skip reindex if content is identical.
+                    if (stored.ContentHash is null || HashFileContent(info.Abs) != stored.ContentHash)
+                        toReindex.Add(info.Abs);
                 }
             }
             var toRemove = indexedByPath.Keys
@@ -487,24 +515,103 @@ public class FileWatcherService : IHostedService, IDisposable
         Changed?.Invoke();
     }
 
+    /// <summary>SHA-256 hex digest of a file's UTF-8 text — matches the hash stored by the indexer.</summary>
+    private static string HashFileContent(string absPath)
+    {
+        var content = File.ReadAllText(absPath);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+    }
+
     private sealed class RootHandle : IDisposable
     {
         private readonly WatchedRoot _w;
-        private readonly FileSystemWatcher _fsw;
+        private readonly FileSystemWatcher? _fsw;
         private readonly IReadOnlySet<string> _exts;
         private readonly GitIgnoreMatcher _ignore;
         private readonly ILogger _log;
+        private readonly bool _usePolling;
+        private CancellationTokenSource? _pollCts;
+        private const int PollIntervalMs = 3_000;
+
         public Action<string>? OnReindex;
         public Action<string>? OnRemove;
         public Action<string>? OnError;
 
-        public RootHandle(WatchedRoot w, FileSystemWatcher fsw, IReadOnlySet<string> exts, GitIgnoreMatcher ignore, ILogger log)
+        public RootHandle(WatchedRoot w, FileSystemWatcher? fsw, IReadOnlySet<string> exts, GitIgnoreMatcher ignore, ILogger log, bool usePolling = false)
         {
             _w = w;
             _fsw = fsw;
             _exts = exts;
             _ignore = ignore;
             _log = log;
+            _usePolling = usePolling;
+        }
+
+        /// <summary>
+        /// Starts a background polling loop that periodically diffs the directory snapshot
+        /// and fires <see cref="OnReindex"/>/<see cref="OnRemove"/> for changed/deleted files.
+        /// Used when <see cref="FileSystemWatcher"/> is unavailable (e.g. inside a container).
+        /// </summary>
+        public void StartPolling()
+        {
+            _pollCts = new CancellationTokenSource();
+            _ = Task.Run(() => PollLoopAsync(_pollCts.Token));
+        }
+
+        private async Task PollLoopAsync(CancellationToken ct)
+        {
+            var snapshot = TakeSnapshot();
+            while (!ct.IsCancellationRequested)
+            {
+                try { await Task.Delay(PollIntervalMs, ct); }
+                catch (OperationCanceledException) { break; }
+
+                var current = TakeSnapshot();
+
+                foreach (var (path, mtime) in current)
+                {
+                    try {
+                        if (!snapshot.TryGetValue(path, out var prev) || mtime > prev)
+                            OnReindex?.Invoke(path);
+                    }
+                    catch (Exception ex)
+                    {
+                        OnError?.Invoke(ex.Message);
+                    }
+                }
+                
+                foreach (var path in snapshot.Keys)
+                {
+                    
+                    try {
+                        if (!current.ContainsKey(path))
+                            OnRemove?.Invoke(path);
+                    }
+                    catch (Exception ex)
+                    {
+                        OnError?.Invoke(ex.Message);
+                    }
+                }
+
+                snapshot = current;
+            }
+        }
+
+        private Dictionary<string, DateTime> TakeSnapshot()
+        {
+            var search = _w.IncludeSubdirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var result = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var abs in Directory.EnumerateFiles(_w.Path, "*.*", search))
+                {
+                    if (!_exts.Contains(Path.GetExtension(abs))) continue;
+                    if (_ignore.IsIgnored(abs)) continue;
+                    result[abs] = File.GetLastWriteTimeUtc(abs);
+                }
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Poll snapshot failed for {Path}", _w.Path); }
+            return result;
         }
 
         private bool ShouldReact(string path)
@@ -539,12 +646,17 @@ public class FileWatcherService : IHostedService, IDisposable
 
         public void Dispose()
         {
-            try
+            _pollCts?.Cancel();
+            _pollCts?.Dispose();
+            if (_fsw is not null)
             {
-                _fsw.EnableRaisingEvents = false;
-                _fsw.Dispose();
+                try
+                {
+                    _fsw.EnableRaisingEvents = false;
+                    _fsw.Dispose();
+                }
+                catch { /* ignore */ }
             }
-            catch { /* ignore */ }
         }
     }
 }
