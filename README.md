@@ -102,7 +102,12 @@ docker compose up -d --build
 > CODERAG_Embedding__Model=qwen3-embedding
 > CODERAG_Embedding__BaseUrl=http://ollama:11434
 > ```
-> The `ollama-pull` service automatically pulls `qwen3-embedding` on first start. Model files are stored at `OLLAMA_DATA_PATH` (default: `./ollama-data`).
+> The `ollama-pull` service automatically pulls the configured model on first start. Model files are stored at `OLLAMA_DATA_PATH` (default: `./ollama-data`).
+>
+> **GPU support:** by default Ollama runs CPU-only. Add the appropriate override for your GPU:
+> - **NVIDIA**: `docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d --build` (requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html))
+> - **AMD**: `docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build`
+> - **Intel**: `docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d --build`
 
 The first build takes a few minutes (restores NuGet packages, runs `npm ci`). Subsequent starts are instant.
 
