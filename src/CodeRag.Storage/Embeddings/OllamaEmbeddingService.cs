@@ -43,7 +43,7 @@ public class OllamaEmbeddingService : IEmbeddingService, IDisposable
         {
             Input = texts.ToList(),
             Model = _model,
-            KeepAlive = "-1"
+            KeepAlive = "-1m"
         }, ct);
         return res.Embeddings;
     }
