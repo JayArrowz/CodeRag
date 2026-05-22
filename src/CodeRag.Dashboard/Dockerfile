@@ -37,17 +37,7 @@ COPY --from=build /app/publish ./
 # Copy ts-analyzer with pre-installed node_modules from the node-deps stage
 COPY --from=node-deps /app/tools/ts-analyzer ./tools/ts-analyzer
 
-# Generate a self-signed dev certificate for HTTPS.
-# The password is set via CERT_PASSWORD (default: coderag-dev).
-# Override at build time:  docker build --build-arg CERT_PASSWORD=<your-password> ...
-ARG CERT_PASSWORD=coderag-dev
-RUN mkdir -p /https \
-    && dotnet dev-certs https -ep /https/aspnetapp.pfx -p "${CERT_PASSWORD}" \
-    && chmod 600 /https/aspnetapp.pfx
-
-ENV ASPNETCORE_URLS=https://+:8080
-ENV ASPNETCORE_Kestrel__Certificates__Default__Path=/https/aspnetapp.pfx
-ENV ASPNETCORE_Kestrel__Certificates__Default__Password=${CERT_PASSWORD}
+ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
 ENTRYPOINT ["dotnet", "CodeRag.Dashboard.dll"]

@@ -67,9 +67,6 @@ services:
       CODERAG_Embedding__BaseUrl: "${CODERAG_Embedding__BaseUrl:-}"
       # ── ASP.NET Core ────────────────────────────────────────────────────────
       ASPNETCORE_ENVIRONMENT: Production
-      # Dev-cert password — must match the CERT_PASSWORD build arg used when
-      # the image was built (default: coderag-dev).
-      ASPNETCORE_Kestrel__Certificates__Default__Password: "${CERT_PASSWORD:-coderag-dev}"
       # ── Persistence ─────────────────────────────────────────────────────────
       # Watches are stored in the named volume below so they survive restarts.
       CODERAG_WatchesFile: ${CODERAG_WatchesFile:-/data/watches.json}

@@ -114,10 +114,8 @@ The first build takes a few minutes (restores NuGet packages, runs `npm ci`). Su
 **3. Open the dashboard:**
 
 ```
-https://localhost:5180
+http://localhost:5180
 ```
-
-The self-signed dev certificate will trigger a browser security warning — click **Advanced → Proceed** to continue.
 
 > **Indexing paths**: the host directory set by `WORKSPACE_PATH` in your `.env` file (default: the repo root) is mounted read-write at `/workspace` inside the container. All paths entered in the dashboard must use this prefix — e.g. `/workspace/myapp` maps to `$WORKSPACE_PATH/myapp` on the host.
 
