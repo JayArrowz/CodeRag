@@ -94,6 +94,16 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+> **Using Ollama for embeddings?** Enable the `ollama` profile so the Ollama server and model pull run alongside the dashboard:
+> ```bash
+> # in .env
+> COMPOSE_PROFILES=ollama
+> CODERAG_Embedding__Provider=Ollama
+> CODERAG_Embedding__Model=qwen3-embedding
+> CODERAG_Embedding__BaseUrl=http://ollama:11434
+> ```
+> The `ollama-pull` service automatically pulls `qwen3-embedding` on first start. Model files are stored at `OLLAMA_DATA_PATH` (default: `./ollama-data`).
+
 The first build takes a few minutes (restores NuGet packages, runs `npm ci`). Subsequent starts are instant.
 
 **3. Open the dashboard:**
@@ -144,7 +154,7 @@ Edit `src/CodeRag.Dashboard/appsettings.json` (or use environment variables):
 
 **Ollama:**
 ```json
-"Embedding": { "Provider": "Ollama", "ApiKey": "sk-...", "Model": "text-embedding-3-small", "Dimensions": 1536 }
+"Embedding": { "Provider": "Ollama", "Model": "qwen3-embedding", "Dimensions": 3072, "BaseUrl": "http://localhost:11434" }
 ```
 
 Without an API key the app starts with fake embeddings (vector search returns nothing useful but the rest of the UI works).
@@ -242,6 +252,7 @@ All settings live under two JSON sections in `appsettings.json`. Every key can b
 |------------------|---------------|--------------|-------|
 | `OpenAI` | `text-embedding-3-small` | 1536 | Set `BaseUrl` to override the endpoint (Azure OpenAI, local proxy, etc.) |
 | `Google` | `text-embedding-004` | 3072 | Uses Gemini Embedding API. `models/gemini-embedding-001` also works (3072 dims). |
+| `Ollama` | _(none)_ | _(model-specific)_ | Set `BaseUrl` to the Ollama server (e.g. `http://localhost:11434`). When using Docker Compose, use `http://ollama:11434` and enable `COMPOSE_PROFILES=ollama`. |
 
 `Dimensions` can be left at `0` to use the provider default. When no `ApiKey` is set, a deterministic fake embedding service is used (useful for smoke tests, not for real search).
 

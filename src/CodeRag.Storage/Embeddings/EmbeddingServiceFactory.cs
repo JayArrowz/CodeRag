@@ -27,12 +27,6 @@ public static class EmbeddingServiceFactory
     /// <summary>Build an <see cref="IEmbeddingService"/> from an <see cref="EmbeddingOptions"/> instance.</summary>
     public static IEmbeddingService Build(EmbeddingOptions opts)
     {
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
-        {
-            var dims = EffectiveDimensions(opts);
-            return new FakeEmbeddingService(dims);
-        }
-
         return opts.Provider switch
         {
             EmbeddingProviderType.OpenAI => BuildOpenAi(opts),

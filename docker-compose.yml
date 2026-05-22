@@ -16,6 +16,33 @@ services:
       timeout: 5s
       retries: 5
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ollama]
+    restart: unless-stopped
+    volumes:
+      - ${OLLAMA_DATA_PATH:-ollama-data}:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [ollama]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      CODERAG_Embedding__Model: "${CODERAG_Embedding__Model:-qwen3-embedding}"
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${CODERAG_Embedding__Model}"]
+    restart: "no"
+
   dashboard:
     build:
       context: .
@@ -23,7 +50,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+        required: false
     environment:
+      CODERAG_Watcher__StartupSweepDelaySeconds: "${CODERAG_Watcher__StartupSweepDelaySeconds:-5}"
+
       # ── Database ────────────────────────────────────────────────────────────
       CODERAG_Database__Provider: "${CODERAG_Database__Provider:-Postgres}"
       CODERAG_Database__ConnectionString: "${CODERAG_Database__ConnectionString:-Host=postgres;Port=5432;Database=coderag;Username=coderag;Password=changeme}"
@@ -32,6 +64,7 @@ services:
       CODERAG_Embedding__ApiKey: "${CODERAG_Embedding__ApiKey:-}"
       CODERAG_Embedding__Model: "${CODERAG_Embedding__Model:-models/gemini-embedding-001}"
       CODERAG_Embedding__Dimensions: "${CODERAG_Embedding__Dimensions:-3072}"
+      CODERAG_Embedding__BaseUrl: "${CODERAG_Embedding__BaseUrl:-}"
       # ── ASP.NET Core ────────────────────────────────────────────────────────
       ASPNETCORE_ENVIRONMENT: Production
       # Dev-cert password — must match the CERT_PASSWORD build arg used when
@@ -39,7 +72,7 @@ services:
       ASPNETCORE_Kestrel__Certificates__Default__Password: "${CERT_PASSWORD:-coderag-dev}"
       # ── Persistence ─────────────────────────────────────────────────────────
       # Watches are stored in the named volume below so they survive restarts.
-      CODERAG_WatchesFile: /data/watches.json
+      CODERAG_WatchesFile: ${CODERAG_WatchesFile:-/data/watches.json}
     ports:
       - "5180:8080"
     volumes:
@@ -53,4 +86,5 @@ services:
 volumes:
   postgres-data:
   watches-data:
+  ollama-data:
 
