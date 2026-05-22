@@ -83,7 +83,10 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseAntiforgery();
 
-app.UseSwagger();
+app.UseSwagger(t =>
+{
+    t.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1;
+});
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "CodeRag API v1");

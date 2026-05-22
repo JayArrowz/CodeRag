@@ -292,6 +292,35 @@ internal abstract class VectorStoreBase<TContext> : IVectorStore
         return rows.Select(VectorStoreMapper.FromEdgeEntity).ToList();
     }
 
+    public async Task<List<CodeChunk>> GetTypeMembersAsync(string workspace, string? @namespace, string className, CancellationToken ct = default)
+    {
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var q = db.CodeChunks.AsNoTracking()
+            .Where(c => c.Workspace == workspace && c.ClassName == className);
+        if (!string.IsNullOrEmpty(@namespace))
+            q = q.Where(c => c.Namespace == @namespace);
+        var rows = await q.OrderBy(c => c.LineNumber).ToListAsync(ct);
+        return rows.Select(VectorStoreMapper.FromEntity).ToList();
+    }
+
+    public async Task<List<CodeChunk>> GetImplementorsAsync(string targetSignature, string? workspace, CancellationToken ct = default)
+    {
+        await using var db = await ContextFactory.CreateDbContextAsync(ct);
+        var edgeKinds = new[] { "inherits", "implements" };
+        var edgesQ = db.CodeEdges.AsNoTracking()
+            .Where(e => edgeKinds.Contains(e.EdgeKind) && e.TargetSignature == targetSignature && e.TargetChunkId != null);
+        if (!string.IsNullOrEmpty(workspace))
+            edgesQ = edgesQ.Where(e => e.Workspace == workspace);
+        var edges = await edgesQ.ToListAsync(ct);
+        if (edges.Count == 0) return new();
+        var sourceIds = edges.Select(e => e.SourceChunkId).Distinct().ToList();
+        var typeKinds = SearchFilter.TypeKinds;
+        var chunks = await db.CodeChunks.AsNoTracking()
+            .Where(c => sourceIds.Contains(c.Id) && typeKinds.Contains(c.Kind))
+            .ToListAsync(ct);
+        return chunks.Select(VectorStoreMapper.FromEntity).ToList();
+    }
+
     public async Task DeleteByWorkspaceAsync(string workspace, CancellationToken ct = default)
     {
         await using var db = await ContextFactory.CreateDbContextAsync(ct);

@@ -320,7 +320,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                     var ctorSymbol = semanticModel?.GetDeclaredSymbol(ctor);
                     var ctorChunk = new CodeChunk
                     {
-                        Kind = "constructor",
+                        Kind = "constructor_declaration",
                         Language = LanguageName,
                         Namespace = nsName,
                         ClassName = className,

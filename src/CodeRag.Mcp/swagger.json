@@ -1,9 +1,9 @@
 {
-  "openapi": "3.0.1",
+  "openapi": "3.0.4",
   "info": {
     "title": "CodeRag API",
     "description": "HTTP surface for indexing, semantic search, and graph queries.",
-    "version": "v1"
+    "version": "3.1.0"
   },
   "paths": {
     "/api/init": {
@@ -161,6 +161,34 @@
       }
     },
     "/api/files": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "List all files indexed in a workspace with their chunk counts and last-indexed timestamp.",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "CodeRag"
@@ -221,6 +249,105 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/files/chunks": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "All indexed chunks for a single file, ordered by line. Use for file-level outline.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/types/members": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "All member chunks (methods, properties, fields) of a type. Use for full class drill-down.",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "className",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/types/implementors": {
+      "get": {
+        "tags": [
+          "CodeRag"
+        ],
+        "summary": "Type-declaration chunks for every type that directly implements or inherits the given signature.",
+        "parameters": [
+          {
+            "name": "signature",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -677,5 +804,10 @@
         "additionalProperties": false
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "name": "CodeRag"
+    }
+  ]
 }

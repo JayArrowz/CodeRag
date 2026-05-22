@@ -3,6 +3,7 @@ using CodeRag.Analyzers.CSharp;
 using CodeRag.Analyzers.TypeScript;
 using CodeRag.Core.Interfaces;
 using CodeRag.Core.Services;
+using Microsoft.Extensions.Configuration;
 
 namespace CodeRag.Dashboard.Services;
 
@@ -28,16 +29,18 @@ public class FileWatcherService : IHostedService, IDisposable
     private readonly WatchPersistence _persistence;
     private readonly IServiceProvider _sp;
     private readonly ILogger<FileWatcherService> _log;
+    private readonly int _startupSweepDelaySeconds;
     private readonly ConcurrentDictionary<Guid, RootHandle> _roots = new();
     private readonly ConcurrentQueue<WatchEvent> _events = new();
     private const int MaxEvents = 500;
     private const int DebounceMs = 750;
 
-    public FileWatcherService(WatchPersistence persistence, IServiceProvider sp, ILogger<FileWatcherService> log)
+    public FileWatcherService(WatchPersistence persistence, IServiceProvider sp, ILogger<FileWatcherService> log, IConfiguration config)
     {
         _persistence = persistence;
         _sp = sp;
         _log = log;
+        _startupSweepDelaySeconds = config.GetValue<int>("Watcher:StartupSweepDelaySeconds", 5);
     }
 
     public IReadOnlyCollection<WatchEvent> RecentEvents() => _events.ToArray();
@@ -51,7 +54,13 @@ public class FileWatcherService : IHostedService, IDisposable
                 Attach(w);
         }
         // Kick off the catch-up sweep in the background — it can take a while for big roots.
-        _ = Task.Run(() => SweepAllAsync(CancellationToken.None));
+        var delaySecs = _startupSweepDelaySeconds;
+        _ = Task.Run(async () =>
+        {
+            if (delaySecs > 0)
+                await Task.Delay(TimeSpan.FromSeconds(delaySecs));
+            await SweepAllAsync(CancellationToken.None);
+        });
         return Task.CompletedTask;
     }
 

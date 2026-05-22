@@ -32,7 +32,7 @@ public class SearchFilter
     public string? FilePath { set { if (!string.IsNullOrEmpty(value)) FilePathContains = [value]; } }
 
     // -------- convenience kind groups --------
-    public static readonly string[] MethodKinds = ["method_declaration", "constructor"];
+    public static readonly string[] MethodKinds = ["method_declaration", "constructor_declaration"];
     public static readonly string[] TypeKinds = ["class_declaration", "record_declaration", "struct_declaration", "interface_declaration", "enum_declaration"];
     public static readonly string[] PropertyKinds = ["property_declaration"];
     public static readonly string[] LibraryCallKinds = ["library_call"];

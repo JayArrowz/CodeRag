@@ -255,7 +255,7 @@ export class HttpClient<SecurityDataType = unknown> {
 
 /**
  * @title CodeRag API
- * @version v1
+ * @version 3.1.0
  *
  * HTTP surface for indexing, semantic search, and graph queries.
  */
@@ -399,6 +399,28 @@ export class Api<
      * No description
      *
      * @tags CodeRag
+     * @name FilesList
+     * @summary List all files indexed in a workspace with their chunk counts and last-indexed timestamp.
+     * @request GET:/api/files
+     */
+    filesList: (
+      query: {
+        workspace: string;
+        project?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<void, any>({
+        path: `/api/files`,
+        method: "GET",
+        query: query,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags CodeRag
      * @name FilesDelete
      * @summary Drop all chunks and edges for a file path.
      * @request DELETE:/api/files
@@ -443,6 +465,73 @@ export class Api<
       this.request<void, any>({
         path: `/api/chunks/${id}/edges/incoming`,
         method: "GET",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags CodeRag
+     * @name FilesChunksList
+     * @summary All indexed chunks for a single file, ordered by line. Use for file-level outline.
+     * @request GET:/api/files/chunks
+     */
+    filesChunksList: (
+      query: {
+        path: string;
+        workspace: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<void, any>({
+        path: `/api/files/chunks`,
+        method: "GET",
+        query: query,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags CodeRag
+     * @name TypesMembersList
+     * @summary All member chunks (methods, properties, fields) of a type. Use for full class drill-down.
+     * @request GET:/api/types/members
+     */
+    typesMembersList: (
+      query: {
+        workspace: string;
+        className: string;
+        namespace?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<void, any>({
+        path: `/api/types/members`,
+        method: "GET",
+        query: query,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags CodeRag
+     * @name TypesImplementorsList
+     * @summary Type-declaration chunks for every type that directly implements or inherits the given signature.
+     * @request GET:/api/types/implementors
+     */
+    typesImplementorsList: (
+      query: {
+        signature: string;
+        workspace?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<void, any>({
+        path: `/api/types/implementors`,
+        method: "GET",
+        query: query,
         ...params,
       }),
 

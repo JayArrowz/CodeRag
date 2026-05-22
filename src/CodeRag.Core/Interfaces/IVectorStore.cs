@@ -65,6 +65,20 @@ public interface IVectorStore : IAsyncDisposable
     Task<CodeChunk?> GetContainingTypeAsync(string workspace, string? @namespace, string className, CancellationToken ct = default);
 
     /// <summary>
+    /// Return all member chunks (methods, properties, fields, etc.) that belong to
+    /// <paramref name="className"/> in the given workspace. Ordered by line number.
+    /// </summary>
+    Task<List<CodeChunk>> GetTypeMembersAsync(string workspace, string? @namespace, string className, CancellationToken ct = default);
+
+    /// <summary>
+    /// Return the type-declaration chunks for every type that directly implements or
+    /// inherits from <paramref name="targetSignature"/> (resolved to an in-solution chunk
+    /// via an "implements" or "inherits" edge). Pass <paramref name="workspace"/> to scope
+    /// the search; pass <c>null</c> to search all workspaces.
+    /// </summary>
+    Task<List<CodeChunk>> GetImplementorsAsync(string targetSignature, string? workspace, CancellationToken ct = default);
+
+    /// <summary>
     /// Return edges originating from the given chunk (what it calls / creates / etc.).
     /// </summary>
     Task<List<CodeEdge>> GetOutgoingEdgesAsync(Guid sourceChunkId, CancellationToken ct = default);

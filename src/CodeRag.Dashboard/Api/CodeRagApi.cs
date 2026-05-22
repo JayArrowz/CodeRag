@@ -151,6 +151,14 @@ public static class CodeRagApi
         })
         .WithSummary("Drop all chunks and edges for a project.");
 
+        api.MapGet("/files", async (string workspace, IVectorStore store, string? project, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(workspace))
+                return Results.BadRequest(new { error = "workspace is required" });
+            return Results.Ok(await store.ListIndexedFilesAsync(workspace, project, ct));
+        })
+        .WithSummary("List all files indexed in a workspace with their chunk counts and last-indexed timestamp.");
+
         api.MapDelete("/files", async (string path, IVectorStore store, CancellationToken ct) =>
         {
             await store.DeleteByFileAsync(path, null, ct);
@@ -166,6 +174,33 @@ public static class CodeRagApi
         api.MapGet("/chunks/{id:guid}/edges/incoming", async (Guid id, IVectorStore store, CancellationToken ct) =>
             Results.Ok(await store.GetIncomingEdgesAsync(id, ct)))
             .WithSummary("Incoming edges pointing at a chunk.");
+
+        api.MapGet("/files/chunks", async (string path, string workspace, IVectorStore store, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workspace))
+                return Results.BadRequest(new { error = "path and workspace are required" });
+            var chunks = await store.GetChunksByFileAsync(path, workspace, ct);
+            return Results.Ok(chunks);
+        })
+        .WithSummary("All indexed chunks for a single file, ordered by line. Use for file-level outline.");
+
+        api.MapGet("/types/members", async (string workspace, string className, string? @namespace, IVectorStore store, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(workspace) || string.IsNullOrWhiteSpace(className))
+                return Results.BadRequest(new { error = "workspace and className are required" });
+            var chunks = await store.GetTypeMembersAsync(workspace, @namespace, className, ct);
+            return Results.Ok(chunks);
+        })
+        .WithSummary("All member chunks (methods, properties, fields) of a type. Use for full class drill-down.");
+
+        api.MapGet("/types/implementors", async (string signature, IVectorStore store, string? workspace, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(signature))
+                return Results.BadRequest(new { error = "signature is required" });
+            var chunks = await store.GetImplementorsAsync(signature, workspace, ct);
+            return Results.Ok(chunks);
+        })
+        .WithSummary("Type-declaration chunks for every type that directly implements or inherits the given signature.");
 
         // ----- jobs -----
         api.MapGet("/jobs", (IndexingJobService jobs) =>

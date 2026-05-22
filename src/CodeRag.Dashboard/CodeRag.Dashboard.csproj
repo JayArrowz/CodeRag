@@ -11,6 +11,6 @@
     <ProjectReference Include="..\CodeRag.Storage\CodeRag.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.7" />
+	  <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.1" />
   </ItemGroup>
 </Project>
