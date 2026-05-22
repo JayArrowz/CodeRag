@@ -257,7 +257,7 @@ All settings live under two JSON sections in `appsettings.json`. Every key can b
 |------------------|---------------|--------------|-------|
 | `OpenAI` | `text-embedding-3-small` | 1536 | Set `BaseUrl` to override the endpoint (Azure OpenAI, local proxy, etc.) |
 | `Google` | `text-embedding-004` | 3072 | Uses Gemini Embedding API. `models/gemini-embedding-001` also works (3072 dims). |
-| `Ollama` | _(none)_ | _(model-specific)_ | Set `BaseUrl` to the Ollama server (e.g. `http://localhost:11434`). When using Docker Compose, use `http://ollama:11434` and enable `COMPOSE_PROFILES=ollama`. |
+| `Ollama` | _(none)_ | _(model-specific)_ | Set `BaseUrl` to the Ollama server (e.g. `http://localhost:11434`). When using Docker Compose, use `http://ollama:11434` and enable `COMPOSE_PROFILES=ollama`. The first embedding request will be slow while Ollama loads the model into memory; after that the model stays resident and subsequent calls are fast. |
 
 `Dimensions` can be left at `0` to use the provider default. When no `ApiKey` is set, a deterministic fake embedding service is used (useful for smoke tests, not for real search).
 
@@ -353,12 +353,16 @@ Indexed on: `workspace`, `source_chunk_id`, `target_chunk_id`, `target_signature
 
 ## MCP / AI Assistant Integration
 
-CodeRag ships an **MCP (Model Context Protocol) server** as an npm package. It exposes two tools to any MCP-compatible AI assistant (Copilot, Claude, Cursor, etc.):
+CodeRag ships an **MCP (Model Context Protocol) server** as an npm package. It exposes the following tools to any MCP-compatible AI assistant (Copilot, Claude, Cursor, etc.):
 
 | Tool | Description |
 |------|-------------|
-| `coderag_query` | Semantic + structural hybrid search over an indexed workspace |
-| `coderag_list_workspaces` | List all indexed workspaces and their stats |
+| `coderag_list_workspaces` | List all indexed workspaces and their chunk/edge counts. Call this first to discover workspace names. |
+| `coderag_bulk_query` | Run 1–10 hybrid searches in parallel (vector + lexical + symbol, RRF-fused). Returns LLM-ready text blocks including call-graph neighbors and external library XML docs. Prefer this over a single query. |
+| `coderag_bulk_file_chunks` | Fetch chunk outlines (all functions, classes, methods) for 1–20 files in parallel. |
+| `coderag_bulk_type_members` | Fetch all members of 1–20 types in parallel. Useful after `coderag_type_implementors` to drill into each implementation. |
+| `coderag_type_implementors` | Find all types that directly implement or inherit a given signature. |
+| `coderag_chunk_edges` | Get incoming and outgoing call-graph edges for a chunk ID. Answers "who calls this?" and "what does this call?" |
 
 ### Install
 
