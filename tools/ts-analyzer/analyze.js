@@ -355,6 +355,54 @@ function getSymbolDoc(symbol, project) {
           if (text) return text;
         }
       }
+      // Also try the raw TS AST jsDoc property — handles lib.d.ts nodes that
+      // ts-morph may not flag as JSDocable.
+      try {
+        const rawNode = decl.compilerNode;
+        if (rawNode.jsDoc && rawNode.jsDoc.length > 0) {
+          const texts = rawNode.jsDoc.map((jd) => {
+            const c = jd.comment;
+            if (!c) return "";
+            return typeof c === "string" ? c : ts.displayPartsToString(c);
+          }).filter((t) => t.trim());
+          const text = texts.join("\n").trim();
+          if (text) return text;
+        }
+      } catch {}
+    }
+  } catch {}
+  // Third fallback: for instantiated/transient generic property symbols
+  // (e.g. `map` on `number[]` is a transient instantiation of `Array<T>.map`),
+  // TypeScript stores the template symbol in the internal `.target` property.
+  // Walk the chain to the original declaration symbol, which has real
+  // declarations and JSDoc comments.
+  try {
+    let root = symbol.compilerSymbol;
+    for (let i = 0; root.target && i < 8; i++) root = root.target;
+    if (root !== symbol.compilerSymbol) {
+      const checker = project.getTypeChecker().compilerObject;
+      const parts = root.getDocumentationComment(checker);
+      if (parts && parts.length > 0) {
+        const text = ts.displayPartsToString(parts).trim();
+        if (text) {
+          const tags = root.getJsDocTags(checker);
+          const tagLines = (tags || []).map((tag) => {
+            const content = ts.displayPartsToString(tag.text || []);
+            return `@${tag.name}${content ? " " + content : ""}`;
+          });
+          return tagLines.length ? `${text}\n${tagLines.join("\n")}` : text;
+        }
+      }
+      for (const rd of root.declarations || []) {
+        if (rd.jsDoc) {
+          for (const jd of rd.jsDoc) {
+            const c = jd.comment;
+            if (!c) continue;
+            const t = (typeof c === "string" ? c : ts.displayPartsToString(c)).trim();
+            if (t) return t;
+          }
+        }
+      }
     }
   } catch {}
   return null;
