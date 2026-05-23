@@ -463,6 +463,28 @@ public class JavaScriptAnalyzer : TreeSitterAnalyzerBase
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var calls = new List<string>();
 
+        // Pre-pass: record (startRow, startCol, endRow, endCol) of every
+        // member_expression that is a call or new callee so we can skip those
+        // in the reads pass below (they're emitted as "calls"/"creates" instead).
+        var calleePositions = new HashSet<(int sr, int sc, int er, int ec)>();
+        foreach (var node in Descendants(body))
+        {
+            if (node.Type == "call_expression")
+            {
+                var fn = node.GetChildForField("function");
+                if (fn is not null && fn.Type == "member_expression")
+                    calleePositions.Add((fn.StartPosition.Row, fn.StartPosition.Column,
+                                         fn.EndPosition.Row, fn.EndPosition.Column));
+            }
+            else if (node.Type == "new_expression")
+            {
+                var ctor = node.GetChildForField("constructor");
+                if (ctor is not null && ctor.Type == "member_expression")
+                    calleePositions.Add((ctor.StartPosition.Row, ctor.StartPosition.Column,
+                                         ctor.EndPosition.Row, ctor.EndPosition.Column));
+            }
+        }
+
         foreach (var node in Descendants(body))
         {
             if (node.Type == "call_expression")
@@ -515,6 +537,38 @@ public class JavaScriptAnalyzer : TreeSitterAnalyzerBase
                     Language = LanguageName,
                 });
                 calls.Add($"new {targetSig}");
+            }
+            else if (node.Type == "member_expression")
+            {
+                // Skip member expressions that were already emitted as call/new callees.
+                var pos = (node.StartPosition.Row, node.StartPosition.Column,
+                           node.EndPosition.Row, node.EndPosition.Column);
+                if (calleePositions.Contains(pos)) continue;
+
+                // Without a type checker, restrict to `this.x` accesses to avoid noise.
+                var objNode = node.GetChildForField("object");
+                var propNode = node.GetChildForField("property");
+                if (objNode?.Text != "this" || propNode is null) continue;
+
+                var memberName = propNode.Text;
+                var line = StartLine(node);
+                if (!seen.Add($"reads|{memberName}|{line}")) continue;
+
+                result.Edges.Add(new CodeEdge
+                {
+                    Id = DeterministicGuid($"{owner.Id}|reads|{memberName}|{line}"),
+                    SourceChunkId = owner.Id,
+                    SourceSignature = owner.Signature ?? owner.FunctionName,
+                    TargetSignature = memberName,
+                    TargetMemberName = memberName,
+                    EdgeKind = "reads",
+                    IsExternal = true,
+                    FilePath = filePath,
+                    LineNumber = line,
+                    ProjectName = projectName,
+                    Language = LanguageName,
+                });
+                calls.Add(memberName);
             }
         }
 

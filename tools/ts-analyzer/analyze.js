@@ -397,9 +397,15 @@ function visitSourceFile(sourceFile, rootDir, chunkIndex, edges) {
   // can map symbols → nodeIds.
   for (const cls of sourceFile.getClasses()) registerClassish(cls, "class_declaration", rel, ns, chunkIndex, edges);
   for (const iface of sourceFile.getInterfaces()) registerClassish(iface, "interface_declaration", rel, ns, chunkIndex, edges);
-  for (const ta of sourceFile.getTypeAliases()) registerTypeAlias(ta, rel, ns, chunkIndex);
+  for (const ta of sourceFile.getTypeAliases()) {
+    registerTypeAlias(ta, rel, ns, chunkIndex);
+    registerTypeLiteralMembers(ta, rel, ns, chunkIndex);
+  }
   for (const fn of sourceFile.getFunctions()) registerFunction(fn, rel, ns, fileClass, chunkIndex);
-  for (const vs of sourceFile.getVariableStatements()) registerArrowVarStatement(vs, rel, ns, fileClass, chunkIndex);
+  for (const vs of sourceFile.getVariableStatements()) {
+    registerArrowVarStatement(vs, rel, ns, fileClass, chunkIndex);
+    registerVariableStatement(vs, rel, ns, fileClass, chunkIndex);
+  }
 }
 
 function registerClassish(node, kind, rel, ns, chunkIndex, edges) {
@@ -627,6 +633,120 @@ function registerArrowVarStatement(vs, rel, ns, fileClass, chunkIndex) {
   }
 }
 
+/**
+ * Register non-function variable declarations as `variable_declaration` chunks.
+ * Complements registerArrowVarStatement (which handles arrow/function expressions).
+ * Covers: `const a: AType = { ... }`, `let count = 0`, etc.
+ */
+function registerVariableStatement(vs, rel, ns, fileClass, chunkIndex) {
+  for (const decl of vs.getDeclarations()) {
+    const init = decl.getInitializer();
+    // Arrow functions and function expressions are already handled by
+    // registerArrowVarStatement with kind "function_declaration".
+    if (init) {
+      const k = init.getKind();
+      if (k === SyntaxKind.ArrowFunction || k === SyntaxKind.FunctionExpression) continue;
+    }
+
+    // Only handle simple name bindings — skip destructuring patterns.
+    const nameNode = decl.getNameNode();
+    if (!Node.isIdentifier(nameNode)) continue;
+    const name = nameNode.getText();
+    if (!name) continue;
+
+    const start = vs.getStartLineNumber();
+    const end = decl.getEndLineNumber();
+
+    // Use the explicit type annotation if present; otherwise try the inferred type.
+    const typeAnnotation = decl.getTypeNode();
+    let typeText = typeAnnotation ? typeAnnotation.getText() : null;
+    if (!typeText) {
+      try { typeText = decl.getType().getText(decl); } catch {}
+    }
+
+    const nodeId = makeNodeId(rel, "variable_declaration", name, start);
+    const sig = (ns ? `${ns}.${name}` : name) + (typeText ? `: ${typeText}` : "");
+
+    chunkIndex.byNode.set(decl, nodeId);
+    chunkIndex.signatureById.set(nodeId, sig);
+
+    emit({
+      type: "chunk",
+      nodeId,
+      kind: "variable_declaration",
+      name,
+      namespace: ns,
+      className: fileClass,
+      functionName: name,
+      signature: sig,
+      filePath: rel,
+      startLine: start,
+      endLine: end,
+      body: decl.getText(),
+      documentation: jsDocText(vs),
+      returnType: typeText,
+      parameters: [],
+      baseTypes: [],
+      interfaces: [],
+      modifiers: [...modifiersOf(vs), vs.getDeclarationKind()],
+    });
+  }
+}
+
+/**
+ * Register PropertySignature members of a TypeLiteral type alias as
+ * `property_declaration` chunks so that field-access reads like `a.prop`
+ * can resolve to a named chunk.
+ *
+ * Example: `type AType = { a: string; b: number }` emits chunks for
+ * `AType.a` and `AType.b`.
+ */
+function registerTypeLiteralMembers(ta, rel, ns, chunkIndex) {
+  const typeNode = ta.getTypeNode();
+  if (!typeNode || typeNode.getKind() !== SyntaxKind.TypeLiteral) return;
+
+  const typeName = ta.getName();
+  for (const member of typeNode.getMembers()) {
+    if (member.getKind() !== SyntaxKind.PropertySignature) continue;
+
+    const propName = member.getName ? member.getName() : null;
+    if (!propName) continue;
+
+    const start = member.getStartLineNumber();
+    const end = member.getEndLineNumber();
+    const propTypeNode = member.getTypeNode ? member.getTypeNode() : null;
+    const typeText = propTypeNode ? propTypeNode.getText() : null;
+
+    const nodeId = makeNodeId(rel, "property_declaration", `${typeName}.${propName}`, start);
+    const sig = (ns ? `${ns}.${typeName}.${propName}` : `${typeName}.${propName}`) +
+                (typeText ? `: ${typeText}` : "");
+
+    chunkIndex.byNode.set(member, nodeId);
+    chunkIndex.signatureById.set(nodeId, sig);
+
+    emit({
+      type: "chunk",
+      nodeId,
+      kind: "property_declaration",
+      name: propName,
+      namespace: ns,
+      className: typeName,
+      functionName: propName,
+      signature: sig,
+      filePath: rel,
+      startLine: start,
+      endLine: end,
+      body: member.getText(),
+      documentation: jsDocText(member),
+      returnType: typeText,
+      parameters: [],
+      baseTypes: [],
+      interfaces: [],
+      modifiers: [],
+    });
+  }
+}
+
 // ─── edge emission (second pass) ────────────────────────────────────────────
 
 function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges, project) {
@@ -704,6 +824,11 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges, project) {
         if (!ownerId) return;
 
         const expr = node.getExpression();
+
+        // Skip bare `super(...)` constructor calls — the parent relationship is
+        // already captured by the `inherits` edge from the extends clause.
+        if (kind === SyntaxKind.CallExpression && expr.getKind() === SyntaxKind.SuperKeyword) return;
+
         const t = resolveCallTarget(expr, chunkIndex, project);
         const line = node.getStartLineNumber();
 
@@ -797,6 +922,87 @@ function emitCallEdges(sourceFiles, chunkIndex, pendingTypeEdges, project) {
           targetAssembly: t.packageName || undefined,
           targetNamespace: t.namespace || undefined,
           targetClassName: t.className || undefined,
+        });
+        return;
+      }
+
+      // ── property / field reads ───────────────────────────────────────────
+      // Emits a "reads" edge for every `obj.prop` access that resolves to a
+      // property or field declaration. Method callees (this.method()) are
+      // already captured as "calls" via CallExpression above and are skipped.
+      if (kind === SyntaxKind.PropertyAccessExpression) {
+        // Skip if this PAE is the function/constructor being invoked — that
+        // is already emitted as "calls" or "creates" by the block above.
+        const parent = node.getParent();
+        if (!parent) return;
+        const pk = parent.getKind();
+        if ((pk === SyntaxKind.CallExpression || pk === SyntaxKind.NewExpression) &&
+            parent.getExpression && parent.getExpression() === node) return;
+
+        const ownerId = findOwnerNodeId(node, chunkIndex);
+        if (!ownerId) return;
+
+        // Resolve the symbol of the accessed member.
+        let sym;
+        try { sym = node.getSymbol(); } catch { return; }
+        if (!sym) return;
+        try { sym = sym.getAliasedSymbol() || sym; } catch {}
+
+        const decls = sym.getDeclarations();
+        if (!decls || decls.length === 0) return;
+
+        // Only emit "reads" for property/field declarations. Method declarations
+        // (MethodDeclaration, FunctionDeclaration …) are already handled via
+        // CallExpression → "calls", so we filter them out here.
+        const propKinds = new Set([
+          SyntaxKind.PropertyDeclaration,
+          SyntaxKind.PropertySignature,
+          SyntaxKind.GetAccessor,
+          SyntaxKind.SetAccessor,
+          SyntaxKind.Parameter,         // constructor param-properties: constructor(public x: T)
+          SyntaxKind.VariableDeclaration,
+        ]);
+        if (!decls.some(d => propKinds.has(d.getKind()))) return;
+
+        // Prefer a project source file over .d.ts / node_modules.
+        const pick =
+          decls.find(d => !d.getSourceFile().isDeclarationFile() && !d.getSourceFile().isInNodeModules()) ||
+          decls[0];
+        const isProjectDecl =
+          !pick.getSourceFile().isDeclarationFile() && !pick.getSourceFile().isInNodeModules();
+        const targetNodeId = isProjectDecl ? (chunkIndex.byNode.get(pick) || null) : null;
+
+        const memberName = sym.getName();
+        const line = node.getStartLineNumber();
+        const targetSig =
+          (targetNodeId && chunkIndex.signatureById.get(targetNodeId)) || memberName;
+        const isExternal = !isProjectDecl;
+
+        let extDoc = null, extPkg = null, extNs = null, extClass = null;
+        if (isExternal && project) {
+          extDoc = getSymbolDoc(sym, project);
+          const meta = getExternalSymbolMeta(sym);
+          extNs = meta.namespace || null;
+          extClass = meta.className || null;
+          try {
+            if (pick) extPkg = extractPackageFromPath(pick.getSourceFile().getFilePath());
+          } catch {}
+        }
+
+        emit({
+          type: "edge",
+          sourceNodeId: ownerId,
+          targetNodeId,
+          targetSignature: targetSig,
+          targetName: memberName,
+          edgeKind: "reads",
+          isExternal,
+          filePath: chunkIndex.fileById.get(ownerId) || null,
+          lineNumber: line,
+          targetDocumentation: extDoc || undefined,
+          targetAssembly: extPkg || undefined,
+          targetNamespace: extNs || undefined,
+          targetClassName: extClass || undefined,
         });
         return;
       }
