@@ -507,15 +507,32 @@ public class CodebaseIndexer
 
     private static void StampWorkspace(List<CodeChunk> chunks, List<CodeEdge> edges, string workspace, string? projectName = null)
     {
+        // Build old-id → new-id map so edge SourceChunkIds stay consistent after
+        // we recompute workspace-scoped deterministic IDs.
+        var idRemap = new Dictionary<Guid, Guid>(chunks.Count);
         foreach (var c in chunks)
         {
             if (string.IsNullOrEmpty(c.Workspace)) c.Workspace = workspace;
             if (!string.IsNullOrEmpty(projectName) && string.IsNullOrEmpty(c.ProjectName)) c.ProjectName = projectName;
+
+            var newId = CodeChunk.DeterministicId(c.Workspace, c.FilePath, c.Kind,
+                c.Namespace, c.ClassName, c.FunctionName, c.Signature);
+            if (newId != c.Id)
+            {
+                idRemap[c.Id] = newId;
+                c.Id = newId;
+            }
         }
         foreach (var e in edges)
         {
             if (string.IsNullOrEmpty(e.Workspace)) e.Workspace = workspace;
             if (!string.IsNullOrEmpty(projectName) && string.IsNullOrEmpty(e.ProjectName)) e.ProjectName = projectName;
+
+            if (idRemap.TryGetValue(e.SourceChunkId, out var remappedSource))
+                e.SourceChunkId = remappedSource;
+
+            if (e.TargetChunkId.HasValue && idRemap.TryGetValue(e.TargetChunkId.Value, out var remappedTarget))
+                e.TargetChunkId = remappedTarget;
         }
     }
 
@@ -721,6 +738,7 @@ public class CodebaseIndexer
                 var matchesAnalyzer =
                     (analyzer.LanguageName == "csharp" &&
                         (solExt.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+                         solExt.Equals(".slnx", StringComparison.OrdinalIgnoreCase) ||
                          solExt.Equals(".csproj", StringComparison.OrdinalIgnoreCase))) ||
                     (analyzer.LanguageName == "typescript" &&
                         Path.GetFileName(solutionPath).StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase) &&
@@ -736,17 +754,25 @@ public class CodebaseIndexer
                 continue;
             }
 
-            // Wipe old chunks/edges before re-emit.
-            foreach (var file in files)
-            {
-                var relativePath = Path.GetRelativePath(projectDir, file);
-                await _vectorStore.DeleteByFileAsync(relativePath, workspace, ct);
-            }
-
             try
             {
                 var result = await analyzer.AnalyzeFilesInSolutionAsync(descriptor, files, workspace);
                 StampFileHashes(result.Chunks, files, projectDir);
+
+                // Wipe old chunks/edges by the *actual* FilePath the analyzer emitted.
+                // Pre-computing this from (projectDir, file) is unreliable because
+                // language analyzers (Roslyn, TS sidecar, ...) may normalize file
+                // paths against their own project root, leading to a path mismatch
+                // and stale rows surviving — which manifests as duplicates after
+                // every reindex.
+                var emittedPaths = result.Chunks
+                    .Select(c => c.FilePath)
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var p in emittedPaths)
+                    await _vectorStore.DeleteByFileAsync(p, workspace, ct);
+
                 combinedChunks.AddRange(result.Chunks);
                 combinedEdges.AddRange(result.Edges);
             }

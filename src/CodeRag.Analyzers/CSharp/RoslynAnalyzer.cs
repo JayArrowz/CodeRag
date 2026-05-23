@@ -299,6 +299,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                     BaseTypes = baseTypes.Select(b => b.signature).ToList(),
                     Interfaces = interfaces.Select(i => i.signature).ToList(),
                 };
+                typeChunk.Id = ChunkId(typeChunk);
                 result.Chunks.Add(typeChunk);
 
                 foreach (var (signature, symbol) in baseTypes)
@@ -337,6 +338,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         Parameters = ctorSymbol?.Parameters.Select(FormatParameter).ToList() ?? [],
                         Attributes = GetAttributes(ctor),
                     };
+                    ctorChunk.Id = ChunkId(ctorChunk);
                     result.Chunks.Add(ctorChunk);
                     ExtractBodyEdges(ctor, ctorChunk, semanticModel, filePath, projectName,
                         solutionProjects, result);
@@ -362,6 +364,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         Modifiers = prop.Modifiers.Select(m => m.Text).ToList(),
                         Attributes = GetAttributes(prop),
                     };
+                    propChunk.Id = ChunkId(propChunk);
                     result.Chunks.Add(propChunk);
                     ExtractBodyEdges(prop, propChunk, semanticModel, filePath, projectName,
                         solutionProjects, result);
@@ -379,7 +382,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                         var fieldSymbol = semanticModel?.GetDeclaredSymbol(variable) as IFieldSymbol;
                         var fieldName = fieldSymbol?.Name ?? variable.Identifier.Text;
                         var lineSpan = variable.GetLocation().GetLineSpan();
-                        result.Chunks.Add(new CodeChunk
+                        var fieldChunk = new CodeChunk
                         {
                             Kind = "field_declaration",
                             Language = LanguageName,
@@ -396,7 +399,9 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                             ProjectName = projectName,
                             Modifiers = fieldModifiers,
                             Attributes = fieldAttributes,
-                        });
+                        };
+                        fieldChunk.Id = ChunkId(fieldChunk);
+                        result.Chunks.Add(fieldChunk);
                     }
                 }
             }
@@ -405,7 +410,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             {
                 var enumSymbol = semanticModel?.GetDeclaredSymbol(enumDecl);
                 var members = enumDecl.Members.Select(m => m.Identifier.Text).ToList();
-                result.Chunks.Add(new CodeChunk
+                var enumChunk = new CodeChunk
                 {
                     Kind = "enum_declaration",
                     Language = LanguageName,
@@ -418,7 +423,9 @@ public class RoslynAnalyzer : ISolutionAnalyzer
                     EndLineNumber = enumDecl.GetLocation().GetLineSpan().EndLinePosition.Line + 1,
                     Documentation = GetXmlDoc(enumDecl),
                     ProjectName = projectName,
-                });
+                };
+                enumChunk.Id = ChunkId(enumChunk);
+                result.Chunks.Add(enumChunk);
             }
         }
     }
@@ -449,6 +456,7 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             Parameters = methodSymbol?.Parameters.Select(FormatParameter).ToList() ?? [],
             Attributes = GetAttributes(method),
         };
+        chunk.Id = ChunkId(chunk);
         result.Chunks.Add(chunk);
 
         ExtractBodyEdges(method, chunk, semanticModel, filePath, projectName, solutionProjects, result);
@@ -521,7 +529,70 @@ public class RoslynAnalyzer : ISolutionAnalyzer
             }
         }
 
+        // Property and field reads: IdentifierNameSyntax nodes that resolve to a
+        // property or field symbol (e.g. `AFieldA` in `var abc = AFieldA + 1`).
+        // These are not InvocationExpressionSyntax so the method-call loop above misses them.
+        foreach (var ident in container.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (IsDeclarationName(ident)) continue;
+
+            var sym = semanticModel.GetSymbolInfo(ident).Symbol;
+            if (sym is not IPropertySymbol and not IFieldSymbol) continue;
+
+            var line = ident.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+            var signature = sym.OriginalDefinition.ToDisplayString();
+            var key = $"reads|{signature}|{line}";
+            if (!seen.Add(key)) continue;
+
+            var containingType = sym.ContainingType;
+            var assembly = containingType?.ContainingAssembly?.Name ?? "";
+            var isExternal = solutionProjects is null || !solutionProjects.Contains(assembly);
+
+            var edge = new CodeEdge
+            {
+                SourceChunkId = owner.Id,
+                SourceSignature = owner.Signature ?? owner.FunctionName,
+                TargetSignature = signature,
+                TargetNamespace = containingType?.ContainingNamespace?.ToDisplayString(),
+                TargetClassName = containingType?.Name,
+                TargetMemberName = sym.Name,
+                TargetAssembly = assembly,
+                EdgeKind = "reads",
+                IsExternal = isExternal,
+                FilePath = filePath,
+                LineNumber = line,
+                ProjectName = projectName,
+                Language = LanguageName,
+                TargetDocumentation = GetSymbolXmlDoc(sym),
+            };
+            edge.Id = DeterministicGuid($"{owner.Id}|reads|{signature}|{line}");
+            result.Edges.Add(edge);
+            callsList.Add(sym.Name);
+        }
+
         owner.Calls = callsList.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="ident"/> is the declaring name token of a
+    /// property, field, or parameter — i.e. NOT a read/write reference to the member.
+    /// </summary>
+    private static bool IsDeclarationName(IdentifierNameSyntax ident)
+    {
+        // Property / indexer / event declaration name
+        if (ident.Parent is PropertyDeclarationSyntax or IndexerDeclarationSyntax
+                or EventDeclarationSyntax or EventFieldDeclarationSyntax)
+            return true;
+
+        // Field / local variable declarator: var x = ..., int x;
+        // The identifier in VariableDeclaratorSyntax IS the declared name (SyntaxToken),
+        // not an IdentifierNameSyntax, so this case is handled via VariableDeclarationSyntax.
+        // MemberAccessExpressionSyntax.Name is an IdentifierNameSyntax — that IS a reference.
+
+        // Named argument label: Foo(param: value) — param is not a member access
+        if (ident.Parent is NameColonSyntax) return true;
+
+        return false;
     }
 
     private CodeEdge MakeMethodEdge(CodeChunk owner, IMethodSymbol target, string edgeKind,
@@ -635,6 +706,18 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         MD5.HashData(Encoding.UTF8.GetBytes(seed), hash);
         return new Guid(hash);
     }
+
+    /// <summary>
+    /// Stable chunk ID derived from the chunk's logical identity so that
+    /// re-indexing the same symbol produces the same GUID. This allows the
+    /// vector store to upsert rather than accumulate duplicates, and keeps
+    /// edge SourceChunkId references valid across reindexes.
+    /// Workspace is excluded at analysis time (it is stamped later by the indexer);
+    /// <see cref="CodebaseIndexer.StampWorkspace"/> will recompute the final
+    /// workspace-scoped ID and remap edge SourceChunkIds accordingly.
+    /// </summary>
+    private static Guid ChunkId(CodeChunk c) =>
+        CodeChunk.DeterministicId("", c.FilePath, c.Kind, c.Namespace, c.ClassName, c.FunctionName, c.Signature);
 
     /// <summary>
     /// Pulls the XML documentation comment off a symbol (including external/library symbols

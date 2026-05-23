@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace CodeRag.Core.Models;
 
 /// <summary>
@@ -242,5 +245,23 @@ public class CodeChunk
             return body;
 
         return string.Join("\n", lines.Take(maxLines)) + "\n// ... truncated";
+    }
+
+    /// <summary>
+    /// Deterministic GUID for a code chunk derived from its logical identity.
+    /// Re-indexing the same symbol in the same workspace always produces the same ID,
+    /// enabling upsert semantics and keeping edge SourceChunkId references stable.
+    /// <para>
+    /// Workspace is included so that the same source file indexed under two different
+    /// workspace names gets distinct primary keys in the shared vector store.
+    /// </para>
+    /// </summary>
+    public static Guid DeterministicId(string workspace, string filePath, string kind,
+        string? ns, string? className, string functionName, string? signature)
+    {
+        var seed = $"{workspace}|{filePath}|{kind}|{ns}|{className}|{functionName}|{signature}";
+        Span<byte> hash = stackalloc byte[16];
+        MD5.HashData(Encoding.UTF8.GetBytes(seed), hash);
+        return new Guid(hash);
     }
 }

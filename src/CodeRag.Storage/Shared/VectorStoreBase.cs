@@ -249,6 +249,38 @@ internal abstract class VectorStoreBase<TContext> : IVectorStore
         }
 
         await db.SaveChangesAsync(ct);
+
+        // Back-fill TargetChunkId on any previously-stored edges that pointed at these
+        // chunks by signature but hadn't been resolved yet (e.g. an "implements" edge
+        // stored when only the impl file was indexed, before the interface was present).
+        var sigs = entities
+            .Select(e => e.Signature)
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Cast<string>()
+            .Distinct()
+            .ToList();
+        if (sigs.Count > 0)
+        {
+            var danglingEdges = await db.CodeEdges
+                .Where(e => e.TargetChunkId == null && !e.IsExternal && sigs.Contains(e.TargetSignature))
+                .ToListAsync(ct);
+            if (danglingEdges.Count > 0)
+            {
+                var sigToId = entities
+                    .Where(e => !string.IsNullOrEmpty(e.Signature))
+                    .GroupBy(e => e.Signature!, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
+                foreach (var edge in danglingEdges)
+                {
+                    if (sigToId.TryGetValue(edge.TargetSignature, out var targetId))
+                    {
+                        edge.TargetChunkId = targetId;
+                        edge.IsExternal = false;
+                    }
+                }
+                await db.SaveChangesAsync(ct);
+            }
+        }
     }
 
     public async Task UpsertEdgesAsync(IReadOnlyList<CodeEdge> edges, CancellationToken ct = default)
@@ -272,6 +304,45 @@ internal abstract class VectorStoreBase<TContext> : IVectorStore
         }
 
         await db.SaveChangesAsync(ct);
+
+        // Resolve TargetChunkId for internal edges whose target wasn't present in the
+        // current analysis run (e.g. incremental reindex of an implementation file when
+        // the interface it implements is already stored but not re-analyzed).
+        // We look up unresolved internal edges by TargetSignature → Chunk.Signature.
+        var unresolvedEntities = entities
+            .Where(e => e.TargetChunkId == null && !e.IsExternal)
+            .ToList();
+        if (unresolvedEntities.Count > 0)
+        {
+            var sigs = unresolvedEntities.Select(e => e.TargetSignature).Distinct().ToList();
+            var resolved = await db.CodeChunks.AsNoTracking()
+                .Where(c => c.Signature != null && sigs.Contains(c.Signature))
+                .Select(c => new { c.Signature, c.Id })
+                .ToListAsync(ct);
+            var sigToId = resolved
+                .GroupBy(c => c.Signature!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
+
+            var toFix = unresolvedEntities
+                .Where(e => sigToId.ContainsKey(e.TargetSignature))
+                .ToList();
+            if (toFix.Count > 0)
+            {
+                var fixIds = toFix.Select(e => e.Id).ToHashSet();
+                var storedEdges = await db.CodeEdges
+                    .Where(e => fixIds.Contains(e.Id))
+                    .ToListAsync(ct);
+                foreach (var stored in storedEdges)
+                {
+                    if (sigToId.TryGetValue(stored.TargetSignature, out var targetId))
+                    {
+                        stored.TargetChunkId = targetId;
+                        stored.IsExternal = false;
+                    }
+                }
+                await db.SaveChangesAsync(ct);
+            }
+        }
     }
 
     public async Task<List<CodeEdge>> GetOutgoingEdgesAsync(Guid sourceChunkId, CancellationToken ct = default)
