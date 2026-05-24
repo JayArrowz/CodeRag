@@ -4,8 +4,7 @@ A hybrid **vector + call-graph** code index for RAG. It extracts classes, method
 
 <img width="2886" height="2067" alt="image" src="https://github.com/user-attachments/assets/c55b2a1e-75a6-4766-8706-359ec925d05b" />
 
-<img width="1719" height="2012" alt="image" src="https://github.com/user-attachments/assets/4d45fe3d-e6fc-4c31-99b6-e39c8a62b4e6" />
-
+<img width="1484" height="2010" alt="image" src="https://github.com/user-attachments/assets/0cc311ae-a709-42e9-9c86-7de7e18c32d8" />
 
 ## Architecture
 
@@ -381,7 +380,7 @@ npx @jayarrowz/mcp-coderag
 
 ### Configure
 
-The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at your running dashboard (defaults to `http://localhost:5180`):
+The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at your running dashboard (defaults to `http://localhost:5180` or port 7180 via docker):
 
 **VS Code (`settings.json`):**
 ```json
@@ -390,7 +389,7 @@ The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at 
     "coderag": {
       "command": "npx",
       "args": ["-y", "@jayarrowz/mcp-coderag"],
-      "env": { "CODERAG_URL": "http://localhost:5180" }
+      "env": { "CODERAG_URL": "http://localhost:7180" }
     }
   }
 }
@@ -402,7 +401,7 @@ The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at 
   "coderag": {
     "command": "npx",
     "args": ["-y", "@jayarrowz/mcp-coderag"],
-    "env": { "CODERAG_URL": "http://localhost:5180" }
+    "env": { "CODERAG_URL": "http://localhost:7180" }
   }
 }
 ```
