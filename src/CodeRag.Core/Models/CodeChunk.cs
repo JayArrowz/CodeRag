@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace CodeRag.Core.Models;
 
@@ -85,16 +86,18 @@ public class CodeChunk
 
     /// <summary>Interfaces implemented. Populated for type chunks.</summary>
     public List<string> Interfaces { get; set; } = [];
-    
+
     /// <summary>
     /// The embedding vector, populated by the embedding service before storage.
     /// </summary>
+    [JsonIgnore]
     public float[]? Embedding { get; set; }
 
     public DateTime IndexedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>SHA-256 hex digest of the file's UTF-8 text at index time. Used to skip
     /// unchanged files during sweeps even when mtimes are unreliable.</summary>
+    [JsonIgnore]
     public string? FileHash { get; set; }
 
     /// <summary>

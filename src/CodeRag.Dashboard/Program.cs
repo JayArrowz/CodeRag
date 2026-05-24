@@ -10,9 +10,13 @@ using CodeRag.Storage;
 using CodeRag.Storage.Embeddings;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.OpenApi;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
-
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.WriteIndented = false;
+});
 // CODERAG_ prefixed env vars override appsettings.json keys
 builder.Configuration.AddEnvironmentVariables("CODERAG_");
 
@@ -37,6 +41,7 @@ builder.Services.AddSingleton<WatchPersistence>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<FileWatcherService>());
 builder.Services.AddScoped<CodeExplorerService>();
+
 
 // Blazor
 builder.Services.AddRazorComponents()
