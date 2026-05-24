@@ -3,9 +3,13 @@
   "version": "1.0.1",
   "description": "A Model Context Protocol (MCP) implementation and reference agent for code understanding and analysis, used by the CodeRag project.",
   "license": "MIT",
-  "author": "Jay Arrowz (https://github.com/jayarrowz)",
-  "homepage": "https://github.com/jayarrowz/CodeRag",
-  "bugs": "https://github.com/jayarrowz/CodeRag/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JayArrowz/CodeRag"
+  },
+  "author": "Jay Arrowz (https://github.com/JayArrowz)",
+  "homepage": "https://github.com/JayArrowz/CodeRag",
+  "bugs": "https://github.com/JayArrowz/CodeRag/issues",
   "main": "dist/src/index.js",
   "bin": {
     "mcp-coderag": "dist/src/index.js"
