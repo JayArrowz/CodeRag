@@ -385,7 +385,7 @@ public class FileWatcherService : IHostedService, IDisposable
                     {
                         using var scope = _sp.CreateScope();
                         var indexer = scope.ServiceProvider.GetRequiredService<CodebaseIndexer>();
-                        var rel = Path.GetRelativePath(w.Path, path);
+                        var rel = Path.GetRelativePath(w.Path, path).Replace('\\', '/');
                         await indexer.RemoveFileAsync(rel, w.Workspace);
                         Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, path, WatchEventKind.RemoveFile, null));
                     }
@@ -449,13 +449,16 @@ public class FileWatcherService : IHostedService, IDisposable
                 if (!exts.Contains(Path.GetExtension(abs))) continue;
                 if (indexer.IsPathExcluded(abs)) continue;
                 if (ignore.IsIgnored(abs)) continue;
-                var rel = Path.GetRelativePath(w.Path, abs);
+                var rel = Path.GetRelativePath(w.Path, abs).Replace('\\', '/');
                 disk[rel] = (abs, File.GetLastWriteTimeUtc(abs));
             }
 
             // 2) Pull the indexed-files snapshot from the store.
             var indexed = await store.ListIndexedFilesAsync(w.Workspace, w.Project, ct);
-            var indexedByPath = indexed.ToDictionary(i => i.FilePath, StringComparer.OrdinalIgnoreCase);
+            var indexedByPath = indexed.ToDictionary(
+                i => i.FilePath.Replace('\\', '/'),
+                i => i,
+                StringComparer.OrdinalIgnoreCase);
 
             // 3) Diff. For files whose mtime advanced, confirm the content actually changed
             // via a SHA-256 hash before queuing a (potentially expensive) reindex.
@@ -473,8 +476,9 @@ public class FileWatcherService : IHostedService, IDisposable
                         toReindex.Add(info.Abs);
                 }
             }
-            var toRemove = indexedByPath.Keys
-                .Where(rel => !disk.ContainsKey(rel))
+            var toRemove = indexed
+                .Where(i => !disk.ContainsKey(i.FilePath.Replace('\\', '/')))
+                .Select(i => i.FilePath)
                 .ToList();
 
             // 4) Apply.
