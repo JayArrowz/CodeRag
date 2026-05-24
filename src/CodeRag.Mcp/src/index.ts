@@ -1,9 +1,11 @@
+#!/usr/bin/env node
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Api } from "./api/Api.js";
 
-const baseURL = process.env.CODERAG_URL ?? "http://localhost:5180";
+const baseURL = process.env.CODERAG_URL ?? "http://localhost:7180";
 const client = new Api({ baseURL });
 
 const server = new McpServer({
@@ -331,6 +333,19 @@ server.registerTool(
   }
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error(`CodeRag MCP server running (CODERAG_URL=${baseURL})`);
+async function main() {
+    try {
+        //console.log("Starting MCP OSRS Server...");
+        const transport = new StdioServerTransport();
+        await server.connect(transport);
+        //console.log("MCP OSRS Server running on stdio");
+    } catch (error) {
+        console.error("Error during startup:", error);
+        process.exit(1);
+    }
+}
+
+main().catch((error) => {
+    console.error("Fatal error in main():", error);
+    process.exit(1);
+});
