@@ -9,6 +9,19 @@ namespace CodeRag.Core.Interfaces;
 public interface ISolutionAnalyzer : ILanguageAnalyzer
 {
     /// <summary>
+    /// Supported solution extensions (name, ext)
+    /// </summary>
+    public Func<string, string, bool>? SupportedSolutionExtensions { get; }
+
+    /// <summary>
+    /// Locate a project descriptor (e.g. <c>tsconfig.json</c>) inside <paramref name="rootPath"/>
+    /// that the given solution-level analyzer can consume. Returns the first match (top-level
+    /// preferred), or <c>null</c> if no descriptor exists or this analyzer doesn't need one
+    /// for per-directory indexing.
+    /// </summary>
+    string[]? ProjectDescriptors { get; }
+
+    /// <summary>
     /// Analyze an entire solution/project file and return all chunks and edges.
     /// </summary>
     Task<AnalysisResult> AnalyzeSolutionAsync(string solutionOrProjectPath, string workspace);

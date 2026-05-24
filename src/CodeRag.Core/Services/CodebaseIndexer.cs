@@ -167,17 +167,12 @@ public class CodebaseIndexer
         var name = Path.GetFileName(solutionOrProjectPath);
         var ext  = Path.GetExtension(solutionOrProjectPath).ToLowerInvariant();
 
-        // tsconfig*.json → TypeScript
-        var isTsConfig = name.StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase)
-                         && ext == ".json";
-        // .sln / .csproj / .vbproj / .fsproj → first analyzer that handles .cs (Roslyn today)
-        var isDotnet = ext is ".sln" or ".csproj" or ".vbproj" or ".fsproj";
-
         foreach (var sa in _analyzers.OfType<ISolutionAnalyzer>())
         {
-            var exts = sa.SupportedExtensions;
-            if (isTsConfig && (exts.Contains(".ts") || exts.Contains(".tsx"))) return sa;
-            if (isDotnet && exts.Contains(".cs")) return sa;
+            if(sa.SupportedSolutionExtensions != null && sa.SupportedSolutionExtensions(name, ext))
+            {
+                return sa;
+            }
         }
         // Fallback: first registered.
         return _analyzers.OfType<ISolutionAnalyzer>().FirstOrDefault();
@@ -555,19 +550,7 @@ public class CodebaseIndexer
     /// </summary>
     private static string? FindProjectDescriptor(string rootPath, ISolutionAnalyzer analyzer)
     {
-        var patterns = new List<string>();
-        foreach (var ext in analyzer.SupportedExtensions)
-        {
-            switch (ext.ToLowerInvariant())
-            {
-                case ".ts":
-                case ".tsx":
-                    patterns.Add("tsconfig.json");
-                    break;
-                // .cs / .csproj / .sln are intentionally NOT auto-routed: see XML doc.
-            }
-        }
-
+        var patterns = analyzer.ProjectDescriptors ?? [];
         foreach (var pat in patterns.Distinct())
         {
             var top = Directory.EnumerateFiles(rootPath, pat, SearchOption.TopDirectoryOnly).FirstOrDefault();
@@ -735,14 +718,8 @@ public class CodebaseIndexer
             if (!string.IsNullOrEmpty(solutionPath) && File.Exists(solutionPath))
             {
                 var solExt = Path.GetExtension(solutionPath);
-                var matchesAnalyzer =
-                    (analyzer.LanguageName == "csharp" &&
-                        (solExt.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
-                         solExt.Equals(".slnx", StringComparison.OrdinalIgnoreCase) ||
-                         solExt.Equals(".csproj", StringComparison.OrdinalIgnoreCase))) ||
-                    (analyzer.LanguageName == "typescript" &&
-                        Path.GetFileName(solutionPath).StartsWith("tsconfig", StringComparison.OrdinalIgnoreCase) &&
-                        solExt.Equals(".json", StringComparison.OrdinalIgnoreCase));
+                var matchesAnalyzer = analyzer.SupportedSolutionExtensions != null
+                    && analyzer.SupportedSolutionExtensions(Path.GetFileName(solutionPath), solExt);
                 if (matchesAnalyzer) descriptor = solutionPath;
             }
             descriptor ??= FindProjectDescriptor(projectDir, analyzer);

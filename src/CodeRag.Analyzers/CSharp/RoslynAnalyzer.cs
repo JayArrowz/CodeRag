@@ -32,6 +32,9 @@ public class RoslynAnalyzer : ISolutionAnalyzer
     public string[] SupportedExtensions => [".cs"];
     public string LanguageName => "csharp";
     public bool HasSemanticModel => true;
+    public Func<string, string, bool>? SupportedSolutionExtensions { get => (name, ext) => ext is ".sln" or ".slnx" or ".csproj" or ".vbproj" or ".fsproj"; }
+
+    public string[]? ProjectDescriptors => null;
 
     /// <summary>
     /// Analyze a single .cs file without semantic context. Extracts structure only;

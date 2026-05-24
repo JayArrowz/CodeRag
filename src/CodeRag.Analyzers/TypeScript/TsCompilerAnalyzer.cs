@@ -33,6 +33,13 @@ public partial class TsCompilerAnalyzer : ISolutionAnalyzer
     public string LanguageName => "typescript";
     public bool HasSemanticModel => true;
 
+    public Func<string, string, bool>? SupportedSolutionExtensions
+    {
+        get => (name, ext) => name.StartsWith("tsconfig", StringComparison.InvariantCultureIgnoreCase) && ext.Equals(".json");
+    }
+
+    public string[]? ProjectDescriptors => ["tsconfig.json"];
+
     private static readonly object _installLock = new();
     private static bool _depsChecked;
 
@@ -120,11 +127,11 @@ public partial class TsCompilerAnalyzer : ISolutionAnalyzer
         {
             FileName = nodeExe,
             WorkingDirectory = sidecarDir,
-            RedirectStandardInput  = true,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
         };
         psi.ArgumentList.Add("analyze.js");
         psi.ArgumentList.Add("--server");
