@@ -57,7 +57,12 @@ public class RoslynAnalyzer : ISolutionAnalyzer
     public async Task<AnalysisResult> AnalyzeSolutionAsync(string solutionOrProjectPath, string workspace)
     {
         var ws = await GetOrLoadWorkspaceAsync(solutionOrProjectPath);
-        var projects = ws.CurrentSolution.Projects.ToList();
+        // Multi-targeted projects (TargetFrameworks) produce one entry per TFM; deduplicate
+        // by project file path so each .csproj is analyzed only once.
+        var projects = ws.CurrentSolution.Projects
+            .GroupBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
         var result = new AnalysisResult();
         var solutionProjectNames = projects.Select(p => p.AssemblyName).ToHashSet();
 
@@ -115,9 +120,14 @@ public class RoslynAnalyzer : ISolutionAnalyzer
         }
 
         var result = new AnalysisResult();
-        var solutionProjectNames = sol.Projects.Select(p => p.AssemblyName).ToHashSet();
+        // Deduplicate multi-targeted projects the same way AnalyzeSolutionAsync does.
+        var dedupedProjects = sol.Projects
+            .GroupBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+        var solutionProjectNames = dedupedProjects.Select(p => p.AssemblyName).ToHashSet();
 
-        foreach (var project in sol.Projects)
+        foreach (var project in dedupedProjects)
         {
             var matching = project.Documents
                 .Where(d => d.FilePath is not null && fileSet.Contains(Path.GetFullPath(d.FilePath)))
