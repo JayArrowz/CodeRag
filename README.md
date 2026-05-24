@@ -1,5 +1,11 @@
 ﻿# CodeRag
 
+[![npm license](https://img.shields.io/npm/l/@jayarrowz/mcp-coderag)](https://www.npmjs.com/package/@jayarrowz/mcp-coderag)
+[![npm version](https://img.shields.io/npm/v/@jayarrowz/mcp-coderag?logo=npm)](https://www.npmjs.com/package/@jayarrowz/mcp-coderag)
+[![GHCR image](https://img.shields.io/badge/GHCR-coderag%2Fcoderag-blue?logo=github)](https://github.com/JayArrowz/CodeRag/pkgs/container/coderag%2Fcoderag)
+[![Docker pull](https://img.shields.io/badge/docker%20pull-ghcr.io%2Fjayarrowz%2Fcoderag%2Fcoderag%3Asha--1aa420f-blue?logo=docker)](https://github.com/JayArrowz/CodeRag/pkgs/container/coderag%2Fcoderag)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg)](https://buymeacoffee.com/jayarrowz)
+
 A hybrid **vector + call-graph** code index for RAG. It extracts classes, methods, properties, library calls, and call-graph edges from C# and TypeScript/TSX source code, embeds them, and stores everything in PostgreSQL/pgvector for semantic and structural search. A Blazor Server dashboard provides live indexing, interactive exploration, and semantic search.
 
 <img width="2886" height="2067" alt="image" src="https://github.com/user-attachments/assets/c55b2a1e-75a6-4766-8706-359ec925d05b" />
