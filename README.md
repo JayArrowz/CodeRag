@@ -2,6 +2,9 @@
 
 A hybrid **vector + call-graph** code index for RAG. It extracts classes, methods, properties, library calls, and call-graph edges from C# and TypeScript/TSX source code, embeds them, and stores everything in PostgreSQL/pgvector for semantic and structural search. A Blazor Server dashboard provides live indexing, interactive exploration, and semantic search.
 
+<img width="2886" height="2067" alt="image" src="https://github.com/user-attachments/assets/c55b2a1e-75a6-4766-8706-359ec925d05b" />
+
+
 ## Architecture
 
 ```
