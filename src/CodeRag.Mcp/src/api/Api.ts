@@ -11,71 +11,71 @@
  */
 
 export interface AddWatchRequest {
-  path?: string | null;
-  workspace?: string | null;
-  project?: string | null;
-  includeSubdirectories?: boolean | null;
-  enabled?: boolean | null;
+  path?: null | string;
+  workspace?: null | string;
+  project?: null | string;
+  includeSubdirectories?: null | boolean;
+  enabled?: null | boolean;
 }
 
 export interface IndexDirectoryRequest {
-  path?: string | null;
-  workspace?: string | null;
-  project?: string | null;
+  path?: null | string;
+  workspace?: null | string;
+  project?: null | string;
 }
 
 export interface IndexSolutionRequest {
-  path?: string | null;
-  workspace?: string | null;
+  path?: null | string;
+  workspace?: null | string;
 }
 
 export interface QueryRequest {
-  query?: string | null;
-  workspace?: string | null;
-  workspaces?: string[] | null;
+  query?: null | string;
+  workspace?: null | string;
+  workspaces?: null | any[];
   allWorkspaces?: boolean;
-  language?: string | null;
-  languages?: string[] | null;
-  project?: string | null;
-  projects?: string[] | null;
-  kind?: string | null;
-  kinds?: string[] | null;
-  filePath?: string | null;
-  filePathContains?: string[] | null;
-  excludeFilePathContains?: string[] | null;
+  language?: null | string;
+  languages?: null | any[];
+  project?: null | string;
+  projects?: null | any[];
+  kind?: null | string;
+  kinds?: null | any[];
+  filePath?: null | string;
+  filePathContains?: null | any[];
+  excludeFilePathContains?: null | any[];
   /** @format int32 */
-  topK?: number | null;
+  topK?: null | number;
   /** @format int32 */
-  candidateMultiplier?: number | null;
-  enableSymbolMatch?: boolean | null;
-  enableVector?: boolean | null;
-  enableLexical?: boolean | null;
+  candidateMultiplier?: null | number;
+  enableSymbolMatch?: null | boolean;
+  enableVector?: null | boolean;
+  enableLexical?: null | boolean;
   /** @format int32 */
-  rrfK?: number | null;
+  rrfK?: null | number;
   /** @format int32 */
-  symbolMaxHits?: number | null;
+  symbolMaxHits?: null | number;
   /** @format double */
-  minVectorScore?: number | null;
-  diversifyResults?: boolean | null;
+  minVectorScore?: null | number;
+  diversifyResults?: null | boolean;
   /** @format int32 */
-  maxPerFile?: number | null;
+  maxPerFile?: null | number;
   /** @format int32 */
-  maxPerClass?: number | null;
-  expandNeighbors?: boolean | null;
-  includeContainingType?: boolean | null;
-  includeIncomingEdges?: boolean | null;
+  maxPerClass?: null | number;
+  expandNeighbors?: null | boolean;
+  includeContainingType?: null | boolean;
+  includeIncomingEdges?: null | boolean;
   /** @format int32 */
-  maxIncomingEdges?: number | null;
-  hydrateEdges?: boolean | null;
+  maxIncomingEdges?: null | number;
+  hydrateEdges?: null | boolean;
   /** @format int32 */
-  tokenBudgetPerResult?: number | null;
-  embeddingQueryOverride?: string | null;
-  retrievalText?: boolean | null;
-  dedupeLibraryDocs?: boolean | null;
+  tokenBudgetPerResult?: null | number;
+  embeddingQueryOverride?: null | string;
+  retrievalText?: null | boolean;
+  dedupeLibraryDocs?: null | boolean;
 }
 
 export interface UpdateWatchRequest {
-  enabled?: boolean | null;
+  enabled?: null | boolean;
 }
 
 import type {
@@ -255,7 +255,7 @@ export class HttpClient<SecurityDataType = unknown> {
 
 /**
  * @title CodeRag API
- * @version 3.1.0
+ * @version v1
  *
  * HTTP surface for indexing, semantic search, and graph queries.
  */

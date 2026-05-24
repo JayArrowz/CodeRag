@@ -30,7 +30,7 @@ server.registerTool(
     try {
       const res = await client.api.workspacesList();
       return {
-        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 0) }],
       };
     } catch (error) {
       return {
@@ -69,7 +69,7 @@ server.registerTool(
         workspace: params.workspace,
       });
       return {
-        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 0) }],
       };
     } catch (error) {
       return {
@@ -108,7 +108,7 @@ server.registerTool(
         client.api.chunksEdgesIncomingList(params.chunkId),
       ]);
       return {
-        content: [{ type: "text", text: JSON.stringify({ incoming: incoming.data, outgoing: outgoing.data }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify({ incoming: incoming.data, outgoing: outgoing.data }, null, 0) }],
       };
     } catch (error) {
       return {
@@ -145,7 +145,7 @@ server.registerTool(
     try {
       const res = await client.api.filesList({ workspace: params.workspace, project: params.project });
       return {
-        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 0) }],
       };
     } catch (error) {
       return {
@@ -218,7 +218,7 @@ server.registerTool(
       );
       const grouped = params.queries.map((q, i) => ({ query: q, results: results[i].data }));
       return {
-        content: [{ type: "text", text: JSON.stringify(grouped, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(grouped, null, 0) }],
       };
     } catch (error) {
       return {
@@ -269,7 +269,7 @@ server.registerTool(
       );
       const grouped = params.types.map((t, i) => ({ ...t, members: results[i].data }));
       return {
-        content: [{ type: "text", text: JSON.stringify(grouped, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(grouped, null, 0) }],
       };
     } catch (error) {
       return {
@@ -317,7 +317,7 @@ server.registerTool(
       );
       const grouped = params.files.map((f, i) => ({ ...f, chunks: results[i].data }));
       return {
-        content: [{ type: "text", text: JSON.stringify(grouped, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(grouped, null, 0) }],
       };
     } catch (error) {
       return {
