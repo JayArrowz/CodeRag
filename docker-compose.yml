@@ -55,6 +55,7 @@ services:
         required: false
     environment:
       CODERAG_Watcher__StartupSweepDelaySeconds: "${CODERAG_Watcher__StartupSweepDelaySeconds:-5}"
+      CODERAG_Watcher__PollIntervalMs: "${CODERAG_Watcher__PollIntervalMs:-1000}"
 
       # ── Database ────────────────────────────────────────────────────────────
       CODERAG_Database__Provider: "${CODERAG_Database__Provider:-Postgres}"
