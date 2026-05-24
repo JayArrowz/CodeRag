@@ -34,6 +34,7 @@ public class FileWatcherService : IHostedService, IDisposable
     private readonly ILogger<FileWatcherService> _log;
     private readonly int _startupSweepDelaySeconds;
     private readonly bool _usePolling;
+    private readonly int _pollIntervalMs;
     private readonly ConcurrentDictionary<Guid, RootHandle> _roots = new();
     private readonly ConcurrentQueue<WatchEvent> _events = new();
     private const int MaxEvents = 500;
@@ -46,6 +47,7 @@ public class FileWatcherService : IHostedService, IDisposable
         _log = log;
         _startupSweepDelaySeconds = config.GetValue<int>("Watcher:StartupSweepDelaySeconds", 5);
         _usePolling = config.GetValue<bool?>("Watcher:UsePolling", null) ?? IsRunningInContainer();
+        _pollIntervalMs = config.GetValue<int>("Watcher:FilePollIntervalMs", 3000);
     }
 
     /// <summary>
@@ -273,7 +275,7 @@ public class FileWatcherService : IHostedService, IDisposable
                 };
             }
 
-            var handle = new RootHandle(w, fsw, exts, ignore, _log, _usePolling);
+            var handle = new RootHandle(w, fsw, exts, ignore, _log, _pollIntervalMs, _usePolling);
             handle.OnReindex = path => EnqueueReindex(w, path);
             handle.OnRemove = path => EnqueueRemove(w, path);
             handle.OnError = msg => Log(new WatchEvent(DateTime.UtcNow, w.Id, w.Workspace, w.Path, WatchEventKind.Error, msg));
@@ -534,14 +536,14 @@ public class FileWatcherService : IHostedService, IDisposable
         private readonly GitIgnoreMatcher _ignore;
         private readonly ILogger _log;
         private readonly bool _usePolling;
+        private readonly int _pollIntervalMs;
         private CancellationTokenSource? _pollCts;
-        private const int PollIntervalMs = 3_000;
 
         public Action<string>? OnReindex;
         public Action<string>? OnRemove;
         public Action<string>? OnError;
 
-        public RootHandle(WatchedRoot w, FileSystemWatcher? fsw, IReadOnlySet<string> exts, GitIgnoreMatcher ignore, ILogger log, bool usePolling = false)
+        public RootHandle(WatchedRoot w, FileSystemWatcher? fsw, IReadOnlySet<string> exts, GitIgnoreMatcher ignore, ILogger log, int pollIntervalMs, bool usePolling = false)
         {
             _w = w;
             _fsw = fsw;
@@ -549,6 +551,7 @@ public class FileWatcherService : IHostedService, IDisposable
             _ignore = ignore;
             _log = log;
             _usePolling = usePolling;
+            _pollIntervalMs = pollIntervalMs;
         }
 
         /// <summary>
@@ -567,7 +570,7 @@ public class FileWatcherService : IHostedService, IDisposable
             var snapshot = TakeSnapshot();
             while (!ct.IsCancellationRequested)
             {
-                try { await Task.Delay(PollIntervalMs, ct); }
+                try { await Task.Delay(_pollIntervalMs, ct); }
                 catch (OperationCanceledException) { break; }
 
                 var current = TakeSnapshot();
