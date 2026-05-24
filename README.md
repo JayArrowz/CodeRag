@@ -1,6 +1,6 @@
 ﻿# CodeRag
 
-[![npm license](https://img.shields.io/npm/l/@jayarrowz/mcp-coderag)](https://www.npmjs.com/package/@jayarrowz/mcp-coderag)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@jayarrowz/mcp-coderag?logo=npm)](https://www.npmjs.com/package/@jayarrowz/mcp-coderag)
 [![GHCR image](https://img.shields.io/badge/GHCR-coderag%2Fcoderag-blue?logo=github)](https://github.com/JayArrowz/CodeRag/pkgs/container/coderag%2Fcoderag)
 [![Docker pull](https://img.shields.io/badge/docker%20pull-ghcr.io%2Fjayarrowz%2Fcoderag%2Fcoderag%3Asha--1aa420f-blue?logo=docker)](https://github.com/JayArrowz/CodeRag/pkgs/container/coderag%2Fcoderag)
