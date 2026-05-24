@@ -26,7 +26,7 @@ npx @jayarrowz/mcp-coderag
 
 ### Configure
 
-The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at your running dashboard (defaults to `http://localhost:5180`):
+The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at your running dashboard (defaults to `http://localhost:5180` or port 7180 via docker):
 
 **VS Code (`settings.json`):**
 ```json
@@ -35,7 +35,7 @@ The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at 
     "coderag": {
       "command": "npx",
       "args": ["-y", "@jayarrowz/mcp-coderag"],
-      "env": { "CODERAG_URL": "http://localhost:5180" }
+      "env": { "CODERAG_URL": "http://localhost:7180" }
     }
   }
 }
@@ -47,7 +47,7 @@ The server connects to the CodeRag dashboard API. Set `CODERAG_URL` to point at 
   "coderag": {
     "command": "npx",
     "args": ["-y", "@jayarrowz/mcp-coderag"],
-    "env": { "CODERAG_URL": "http://localhost:5180" }
+    "env": { "CODERAG_URL": "http://localhost:7180" }
   }
 }
 ```
